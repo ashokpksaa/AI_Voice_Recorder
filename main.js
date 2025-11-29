@@ -11,11 +11,6 @@ let audioChunks = [];
 let audioContext;
 let analyser;
 let source;
-let scriptNode;
-
-// --- SETTINGS (Balance Mode) ---
-const NOISE_THRESHOLD = 0.06; // पहले 0.04 था, अब 0.06 किया (ताकि सर-सर भी कट जाए)
-const VOLUME_BOOST = 2.5;     // पहले 4.0 था, अब 2.5 किया (ताकि शोर न बढ़े)
 
 // Timer
 let startTime;
@@ -31,7 +26,7 @@ function updateTimer() {
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Activating Clean Shield...";
+        statusDiv.innerText = "Activating Pure Voice Mode...";
         
         startTime = Date.now();
         timerInterval = setInterval(updateTimer, 1000);
@@ -40,12 +35,13 @@ startBtn.onclick = async () => {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // 1. MIC INPUT (Google AI ON, Auto Gain OFF)
+        // 1. HARDWARE AI (Auto Gain ON)
+        // हम वापस हार्डवेयर पर भरोसा कर रहे हैं क्योंकि वह "सर-सर" नहीं करता।
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                autoGainControl: false, // ❌ OFF ही रखें
+                autoGainControl: true, // ✅ ON (ताकि मोबाइल खुद नॉइज़ फ्लोर को दबाए)
                 googEchoCancellation: true,
                 googNoiseSuppression: true,
                 googHighpassFilter: true
@@ -54,61 +50,47 @@ startBtn.onclick = async () => {
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // 2. BOOSTER (Controlled)
-        const gainNode = audioContext.createGain();
-        gainNode.gain.value = VOLUME_BOOST;
+        // --- THE "RADIO" CLEANER CHAIN ---
+        // हम कोई Volume Boost नहीं लगा रहे। जो आ रहा है, वही साफ़ होगा।
 
-        // --- 3. FILTERS (Hiss & Horn Killer) ---
-        
-        // A. Low Cut (Rumble Remover)
+        // A. Low Cut (Fan/Rumble Killer)
+        // 150Hz के नीचे का शोर गायब
         const lowCut = audioContext.createBiquadFilter();
         lowCut.type = 'highpass';
-        lowCut.frequency.value = 140; 
+        lowCut.frequency.value = 150; 
 
-        // B. High Cut (Static/Hiss Remover)
-        // इसे हमने 3000Hz कर दिया है। 
-        // यह "सर-सर" और "हॉर्न" दोनों को जड़ से काट देगा।
+        // B. High Cut (HISS & HORN KILLER) - **Main Fix**
+        // "सर-सर" (Hiss) 4000Hz+ पर होती है।
+        // हॉर्न 3500Hz+ पर होता है।
+        // हम 3000Hz पर सबको काट रहे हैं। इसके ऊपर कुछ नहीं आएगा।
         const highCut = audioContext.createBiquadFilter();
         highCut.type = 'lowpass';
         highCut.frequency.value = 3000; 
 
-        // 4. COMPRESSOR (Smooth)
+        // C. Compressor (Leveler)
+        // यह वॉल्यूम नहीं बढ़ाएगा, बस आपकी आवाज़ को एक बराबर रखेगा।
         const compressor = audioContext.createDynamicsCompressor();
-        compressor.threshold.value = -24;
-        compressor.ratio.value = 8;
-        compressor.attack.value = 0.003;
-        compressor.release.value = 0.15;
+        compressor.threshold.value = -20;
+        compressor.knee.value = 40;
+        compressor.ratio.value = 5; 
+        compressor.attack.value = 0.005;
+        compressor.release.value = 0.25;
 
-        // 5. STRONG NOISE GATE (Script)
-        scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
-        scriptNode.onaudioprocess = function(ev) {
-            const input = ev.inputBuffer.getChannelData(0);
-            const output = ev.outputBuffer.getChannelData(0);
-            for (let i = 0; i < input.length; i++) {
-                // अगर आवाज़ 6% से कम है (Static/Hiss), तो उसे मार दो (0)
-                if (Math.abs(input[i]) < NOISE_THRESHOLD) {
-                    output[i] = 0;
-                } else {
-                    output[i] = input[i];
-                }
-            }
-        };
-
-        // CONNECTIONS
-        source.connect(gainNode);
-        gainNode.connect(lowCut);
+        // --- CONNECTIONS ---
+        // Mic -> LowCut -> HighCut -> Compressor -> Out
+        source.connect(lowCut);
         lowCut.connect(highCut);
         highCut.connect(compressor);
-        compressor.connect(scriptNode);
         
+        // Visualizer
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
-        scriptNode.connect(analyser);
+        compressor.connect(analyser);
 
         const dest = audioContext.createMediaStreamDestination();
-        scriptNode.connect(dest);
+        compressor.connect(dest);
 
-        // RECORDER
+        // Recorder
         let options = { mimeType: 'audio/webm;codecs=opus' };
         if (!MediaRecorder.isTypeSupported(options.mimeType)) {
             options = { mimeType: 'audio/mp4' };
@@ -126,7 +108,7 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Saved (No Hiss)!";
+            statusDiv.innerText = "✅ Saved (Zero Hiss)!";
             statusDiv.style.color = "#00e676";
             timerDiv.style.color = "#00e676";
         };
@@ -186,7 +168,7 @@ function visualize() {
 
         for (let i = 0; i < bufferLength; i++) {
             barHeight = dataArray[i] / 2;
-            canvasCtx.fillStyle = `hsl(200, 100%, ${Math.min(barHeight + 20, 60)}%)`; 
+            canvasCtx.fillStyle = `hsl(160, 100%, ${Math.min(barHeight + 20, 60)}%)`; 
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
