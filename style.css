@@ -1,0 +1,31 @@
+body {
+    font-family: sans-serif;
+    background: #1e1e2f;
+    color: white;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+}
+.container {
+    text-align: center;
+    background: #27293d;
+    padding: 30px;
+    border-radius: 15px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+}
+button {
+    padding: 12px 24px;
+    margin: 10px;
+    font-size: 16px;
+    cursor: pointer;
+    border: none;
+    border-radius: 5px;
+    font-weight: bold;
+}
+#btnStart { background: #00f2c3; color: #1e1e2f; }
+#btnStop { background: #ff3636; color: white; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.status-box { margin: 20px 0; color: #aaa; }
+#audioPlayer { margin-top: 20px; display: block; width: 100%; }
