@@ -12,12 +12,11 @@ let chunks = [];
 function log(msg, isError = false) {
     statusSpan.innerText = msg;
     statusSpan.style.color = isError ? "#ff4444" : "#00f2c3";
-    console.log(msg);
 }
 
 startBtn.onclick = async () => {
     try {
-        log("Initializing...");
+        log("Setting up Studio Audio...");
 
         // 1. Audio Context
         const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -28,37 +27,64 @@ startBtn.onclick = async () => {
         try {
             await audioContext.audioWorklet.addModule('processor.js');
         } catch (e) {
-            throw new Error("Processor load failed: " + e.message);
+            throw new Error("Processor Error: " + e.message);
         }
 
-        // 3. Microphone Access
-        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // 3. Microphone Input
+        mediaStream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+                echoCancellation: true,      // ब्राउज़र का अपना Echo Cancel
+                noiseSuppression: true,      // ब्राउज़र का अपना Noise Suppression
+                autoGainControl: true        // ऑटो वॉल्यूम
+            } 
+        });
         const source = audioContext.createMediaStreamSource(mediaStream);
 
-        // 4. Connect Node (No WASM needed now)
-        workletNode = new AudioWorkletNode(audioContext, 'rnnoise-processor');
+        // --- STUDIO FILTERS (ये है असली जादू) ---
 
-        // 5. Connect Graph
+        // A. High-Pass Filter (पंखे और हवा की "धड़धड़" आवाज़ हटाता है)
+        const lowCut = audioContext.createBiquadFilter();
+        lowCut.type = 'highpass';
+        lowCut.frequency.value = 120; // 120Hz से नीचे का शोर गायब
+
+        // B. Low-Pass Filter (तीखी "Sss" और हिसिंग आवाज़ हटाता है)
+        const highCut = audioContext.createBiquadFilter();
+        highCut.type = 'lowpass';
+        highCut.frequency.value = 8000; // बहुत बारीक शोर गायब
+
+        // C. Compressor (आवाज़ को भारी और एक बराबर करता है)
+        const compressor = audioContext.createDynamicsCompressor();
+        compressor.threshold.value = -20;
+        compressor.knee.value = 40;
+        compressor.ratio.value = 12;
+        compressor.attack.value = 0;
+        compressor.release.value = 0.25;
+
+        // D. Noise Gate (Processor.js वाला)
+        workletNode = new AudioWorkletNode(audioContext, 'voice-gate');
+
+        // 4. कनेक्शन चेन: Mic -> LowCut -> HighCut -> Compressor -> Gate -> Recorder
+        source.connect(lowCut);
+        lowCut.connect(highCut);
+        highCut.connect(compressor);
+        compressor.connect(workletNode); // गेट आखिरी में
+        
         const dest = audioContext.createMediaStreamDestination();
-        source.connect(workletNode);
         workletNode.connect(dest);
 
-        // 6. Start Recording
+        // 5. Recording
         mediaRecorder = new MediaRecorder(dest.stream);
-        mediaRecorder.ondataavailable = e => {
-            if (e.data.size > 0) chunks.push(e.data);
-        };
+        mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
         
         mediaRecorder.onstop = () => {
             const blob = new Blob(chunks, { type: 'audio/webm' });
-            const url = URL.createObjectURL(blob);
-            audioPlayer.src = url;
+            audioPlayer.src = URL.createObjectURL(blob);
             chunks = [];
-            log("✅ Saved! Play below to listen.");
+            log("✅ Studio Audio Saved. Listen below.");
         };
 
         mediaRecorder.start();
-        log("🔴 Recording... (Noise Gate Active)");
+        log("🔴 Recording (Filters + Compressor Active)...");
         
         startBtn.disabled = true;
         stopBtn.disabled = false;
@@ -69,10 +95,9 @@ startBtn.onclick = async () => {
 };
 
 stopBtn.onclick = () => {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
-    if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
+    if (mediaRecorder) mediaRecorder.stop();
+    if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
     if (audioContext) audioContext.close();
-    
     startBtn.disabled = false;
     stopBtn.disabled = true;
 };
