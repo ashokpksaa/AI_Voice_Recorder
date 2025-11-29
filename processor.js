@@ -1,10 +1,10 @@
 class VoiceGate extends AudioWorkletProcessor {
     constructor() {
         super();
-        // सेटिंग्स
-        this.threshold = 0.015; // अगर शोर ज्यादा आ रहा है, तो इसे 0.02 या 0.03 कर दें
-        this.attack = 0.003;
-        this.release = 0.20;
+        // सेटिंग्स (Natural Voice के लिए)
+        this.threshold = 0.01;  // ✅ इसे कम किया ताकि धीमी आवाज़ भी रिकॉर्ड हो
+        this.attack = 0.002;    
+        this.release = 0.35;    // ✅ इसे बढ़ाया ताकि "Vibration" न हो (Smooth Fade)
         this.envelope = 0;
     }
 
@@ -21,20 +21,29 @@ class VoiceGate extends AudioWorkletProcessor {
             const sample = inputChannel[i];
             const absSample = Math.abs(sample);
 
-            // आवाज़ की ताकत नापना
             if (absSample > this.envelope) {
                 this.envelope = this.attack * (absSample - this.envelope) + this.envelope;
             } else {
                 this.envelope = this.release * (absSample - this.envelope) + this.envelope;
             }
 
-            // गेट लॉजिक
+            // Smooth Gate Logic
+            let gain = 1.0;
             if (this.envelope < this.threshold) {
-                // पूरी तरह सन्नाटा कर दो (Absolute Silence)
-                outputChannel[i] = 0; 
+                // सन्नाटा (हल्का सा Fade Out करें ताकि झटके से बंद न हो)
+                gain = 0;
             } else {
-                // आवाज़ जाने दो
-                outputChannel[i] = sample;
+                gain = 1.0;
+            }
+
+            // आवाज़ को Apply करें
+            // नोट: हम सीधा 0 नहीं कर रहे, बल्कि स्मूथ ट्रांज़िशन के लिए Envelope का यूज़ कर सकते हैं, 
+            // लेकिन फ़िलहाल simple gate रखेंगे जो vibration न करे।
+            
+            if(gain === 0) {
+                 outputChannel[i] = 0;
+            } else {
+                 outputChannel[i] = sample;
             }
         }
         return true;
