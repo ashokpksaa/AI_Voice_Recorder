@@ -1,20 +1,18 @@
-class VoiceProcessor extends AudioWorkletProcessor {
+class VoiceGate extends AudioWorkletProcessor {
     constructor() {
         super();
-        // सेटिंग्स (इन्हें शोर के हिसाब से एडजस्ट किया जा सकता है)
-        this.threshold = 0.02;  // सेंसिटिविटी (0.01 से 0.05 के बीच रखें)
-        this.attack = 0.003;    // आवाज़ कितनी जल्दी खुले
-        this.release = 0.25;    // आवाज़ बंद होने में कितना समय ले
-        
+        // सेटिंग्स
+        this.threshold = 0.015; // अगर शोर ज्यादा आ रहा है, तो इसे 0.02 या 0.03 कर दें
+        this.attack = 0.003;
+        this.release = 0.20;
         this.envelope = 0;
     }
 
-    process(inputs, outputs, parameters) {
+    process(inputs, outputs) {
         const input = inputs[0];
         const output = outputs[0];
 
-        // अगर कोई ऑडियो नहीं आ रहा, तो बाहर निकलें
-        if (!input || !input[0] || !output || !output[0]) return true;
+        if (!input || !input[0] || !output) return true;
 
         const inputChannel = input[0];
         const outputChannel = output[0];
@@ -23,30 +21,24 @@ class VoiceProcessor extends AudioWorkletProcessor {
             const sample = inputChannel[i];
             const absSample = Math.abs(sample);
 
-            // 1. एन्वेलप (Envelope) कैलकुलेशन (आवाज़ का लेवल नापना)
+            // आवाज़ की ताकत नापना
             if (absSample > this.envelope) {
                 this.envelope = this.attack * (absSample - this.envelope) + this.envelope;
             } else {
                 this.envelope = this.release * (absSample - this.envelope) + this.envelope;
             }
 
-            // 2. नॉइज़ गेट लॉजिक (Noise Gate Logic)
-            let gain = 1.0;
-            
-            // अगर आवाज़ थ्रेशोल्ड से कम है (यानी सिर्फ शोर है), तो म्यूट करें
+            // गेट लॉजिक
             if (this.envelope < this.threshold) {
-                // स्मूथ म्यूटिंग (ताकि आवाज़ कटे नहीं)
-                gain = Math.max(0, gain - 0.05); 
-                outputChannel[i] = 0; // सन्नाटा (Silence)
+                // पूरी तरह सन्नाटा कर दो (Absolute Silence)
+                outputChannel[i] = 0; 
             } else {
-                // इंसान बोल रहा है -> पास करो
-                gain = 1.0;
+                // आवाज़ जाने दो
                 outputChannel[i] = sample;
             }
         }
-
         return true;
     }
 }
 
-registerProcessor('rnnoise-processor', VoiceProcessor);
+registerProcessor('voice-gate', VoiceGate);
