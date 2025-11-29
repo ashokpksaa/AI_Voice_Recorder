@@ -12,7 +12,7 @@ let audioContext;
 let analyser;
 let source;
 
-// Timer Variables
+// Timer Setup
 let startTime;
 let timerInterval;
 
@@ -26,8 +26,9 @@ function updateTimer() {
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Activating Stable Mode...";
+        statusDiv.innerText = "Activating Pro Mode...";
         
+        // Timer Start
         startTime = Date.now();
         timerInterval = setInterval(updateTimer, 1000);
         timerDiv.style.color = "#ff3d00";
@@ -35,18 +36,15 @@ startBtn.onclick = async () => {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // --- 1. HARDWARE MASTERY (सबसे ज़रूरी स्टेप) ---
-        // हम ब्राउज़र को Force कर रहे हैं कि वह अपनी "Aggressive" सफाई यूज़ करे।
-        // इससे Echo और Fan Noise 90% हार्डवेयर लेवल पर ही हट जाएगा।
+        // --- 1. SETTINGS (Stability Fix) ---
+        // 'autoGainControl: false' कर दिया ताकि मोबाइल वॉल्यूम न छेड़े
+        // इससे filters हर बार एक जैसा काम करेंगे
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                autoGainControl: true, // इसे True रखें ताकि आवाज़ दबे नहीं
-                channelCount: 1,       // Mono Audio (साफ़ आवाज़ के लिए बेहतर)
-                // Advanced Flags
+                autoGainControl: false, // ❌ Auto Volume बंद (Stability के लिए)
                 googEchoCancellation: true,
-                googExperimentalEchoCancellation: true,
                 googNoiseSuppression: true,
                 googHighpassFilter: true
             }
@@ -54,34 +52,54 @@ startBtn.onclick = async () => {
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // --- 2. SINGLE MASTER FILTER (Stability के लिए) ---
-        // हम 5 फिल्टर नहीं, सिर्फ 1 "Bandpass" लगाएंगे।
-        // यह सिर्फ़ इंसानी आवाज़ की रेंज (100Hz - 8000Hz) को पास करेगा।
-        // बाकी सब (पंखा, हॉर्न, टक-टक) अपने आप बाहर हो जाएंगे।
-        
-        // A. Low Cut (Rumble/Fan/Table Thud remover)
-        const lowCut = audioContext.createBiquadFilter();
-        lowCut.type = 'highpass';
-        lowCut.frequency.value = 110; 
+        // --- 2. VOLUME BOOSTER (Manual Gain) ---
+        // चूंकि हमने Auto Volume बंद किया है, आवाज़ धीमी हो सकती है।
+        // इसलिए हम अपनी तरफ से 3 गुना वॉल्यूम बढ़ा रहे हैं।
+        const gainNode = audioContext.createGain();
+        gainNode.gain.value = 3.0; // Volume Boost
 
-        // B. High Cut (Hiss/Squeak remover)
-        const highCut = audioContext.createBiquadFilter();
-        highCut.type = 'lowpass';
-        highCut.frequency.value = 8000;
+        // --- 3. THE "90% GOOD" FILTERS (Restored) ---
 
-        // C. Simple Compressor (Volume Balance)
-        // सिर्फ़ वॉल्यूम बराबर करने के लिए, आवाज़ छेड़ने के लिए नहीं।
+        // A. High-Pass (100Hz) - Rumble Removal
+        const highPass = audioContext.createBiquadFilter();
+        highPass.type = 'highpass';
+        highPass.frequency.value = 100; 
+
+        // B. Echo Cutter (350Hz) - गूंज हटाने के लिए
+        const echoCut = audioContext.createBiquadFilter();
+        echoCut.type = 'peaking';
+        echoCut.frequency.value = 350;
+        echoCut.Q.value = 1.5;
+        echoCut.gain.value = -10; 
+
+        // C. Wood/Tap Cutter (500Hz) - टेबल की टक-टक हटाने के लिए
+        const woodCut = audioContext.createBiquadFilter();
+        woodCut.type = 'peaking';
+        woodCut.frequency.value = 500; 
+        woodCut.Q.value = 2;
+        woodCut.gain.value = -8;
+
+        // D. Hiss Cutter (8000Hz) - सर-सर हटाने के लिए
+        const lowPass = audioContext.createBiquadFilter();
+        lowPass.type = 'lowpass';
+        lowPass.frequency.value = 8000;
+
+        // E. Compressor (Balanced)
         const compressor = audioContext.createDynamicsCompressor();
-        compressor.threshold.value = -20;
-        compressor.knee.value = 40;
-        compressor.ratio.value = 3;     // Light compression
-        compressor.attack.value = 0.05; // Normal attack (Not too fast)
-        compressor.release.value = 0.25;
+        compressor.threshold.value = -24;
+        compressor.knee.value = 30;
+        compressor.ratio.value = 5;
+        compressor.attack.value = 0.003; 
+        compressor.release.value = 0.20; 
 
-        // Connections: Mic -> LowCut -> HighCut -> Compressor -> Out
-        source.connect(lowCut);
-        lowCut.connect(highCut);
-        highCut.connect(compressor);
+        // --- CONNECTIONS ---
+        // Mic -> Booster -> HighPass -> EchoCut -> WoodCut -> LowPass -> Compressor -> Out
+        source.connect(gainNode);
+        gainNode.connect(highPass);
+        highPass.connect(echoCut);
+        echoCut.connect(woodCut);
+        woodCut.connect(lowPass);
+        lowPass.connect(compressor);
 
         // Visualizer
         analyser = audioContext.createAnalyser();
@@ -92,8 +110,7 @@ startBtn.onclick = async () => {
         compressor.connect(dest);
 
         // Recorder
-        let options = { mimeType: 'audio/webm;codecs=opus' }; 
-        // Opus कोडेक सबसे साफ़ आवाज़ देता है और मोबाइल पर लाइट चलता है
+        let options = { mimeType: 'audio/webm;codecs=opus' };
         if (!MediaRecorder.isTypeSupported(options.mimeType)) {
             options = { mimeType: 'audio/mp4' };
         }
@@ -110,7 +127,7 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Saved (Stable Mode)!";
+            statusDiv.innerText = "✅ Saved!";
             statusDiv.style.color = "#00e676";
             timerDiv.style.color = "#00e676";
         };
@@ -125,7 +142,7 @@ startBtn.onclick = async () => {
         stopBtn.style.opacity = "1";
         stopBtn.style.pointerEvents = "all";
         stopBtn.style.background = "#ff3d00";
-        statusDiv.innerText = "🔴 Recording...";
+        statusDiv.innerText = "🔴 Recording (Pro Mode)...";
         statusDiv.style.color = "#ff3d00";
 
     } catch (err) {
@@ -170,7 +187,7 @@ function visualize() {
 
         for (let i = 0; i < bufferLength; i++) {
             barHeight = dataArray[i] / 2;
-            canvasCtx.fillStyle = `hsl(140, 100%, ${Math.min(barHeight + 20, 60)}%)`; // Stable Green
+            canvasCtx.fillStyle = `hsl(210, 100%, ${Math.min(barHeight + 20, 70)}%)`;
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
