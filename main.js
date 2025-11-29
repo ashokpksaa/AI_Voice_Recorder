@@ -1,6 +1,7 @@
 const startBtn = document.getElementById('btnStart');
 const stopBtn = document.getElementById('btnStop');
 const statusDiv = document.getElementById('status');
+const timerDiv = document.getElementById('timer'); // Timer Element
 const canvas = document.getElementById('visualizer');
 const audioPlayer = document.getElementById('audioPlayer');
 const canvasCtx = canvas.getContext('2d');
@@ -11,20 +12,39 @@ let audioContext;
 let analyser;
 let source;
 
+// Timer Variables
+let startTime;
+let timerInterval;
+
+// Timer Function (घड़ी चलाने के लिए)
+function updateTimer() {
+    const elapsed = Date.now() - startTime; // कितना समय बीता
+    const totalSeconds = Math.floor(elapsed / 1000);
+    
+    const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+    const seconds = (totalSeconds % 60).toString().padStart(2, '0');
+    
+    timerDiv.innerText = `${minutes}:${seconds}`;
+}
+
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Activating Transient Killer...";
+        statusDiv.innerText = "Starting...";
         
+        // --- TIMER START ---
+        startTime = Date.now();
+        timerInterval = setInterval(updateTimer, 1000); // हर 1 सेकंड में अपडेट
+        timerDiv.style.color = "#ff3d00"; // रिकॉर्डिंग के समय लाल रंग
+
+        // --- AUDIO SETUP (Same as before) ---
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // 1. Microphone Input (Hardware AI Forced ON)
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
                 autoGainControl: true, 
-                // Advanced Android Flags
                 googEchoCancellation: true,
                 googExperimentalEchoCancellation: true,
                 googNoiseSuppression: true,
@@ -34,40 +54,33 @@ startBtn.onclick = async () => {
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // --- SURGICAL AUDIO CHAIN ---
-
-        // A. High-Pass Filter (Low Thud Killer)
-        // टेबल की "धमक" (Thud) को काटने के लिए हमने इसे 100Hz से बढ़ाकर 110Hz कर दिया है।
+        // --- FILTERS (No Changes here) ---
+        // 1. Rumble Filter
         const highPass = audioContext.createBiquadFilter();
         highPass.type = 'highpass';
         highPass.frequency.value = 110; 
 
-        // B. "Wood-Cut" Filter (Table Resonance Remover)
-        // टेबल की "टक-टक" अक्सर 500Hz के आसपास गूंजती है।
-        // हम वहां एक गड्ढा (Dip) बना रहे हैं।
+        // 2. Wood-Cut (Table Tap Remover)
         const woodCut = audioContext.createBiquadFilter();
         woodCut.type = 'peaking';
         woodCut.frequency.value = 500; 
-        woodCut.Q.value = 2;          // Sharpness
-        woodCut.gain.value = -8;      // 8dB की कमी (टक-टक दबेगी)
+        woodCut.Q.value = 2;
+        woodCut.gain.value = -8;
 
-        // C. High-Frequency Polish
-        // 8000Hz से ऊपर का हिस हटाएंगे
+        // 3. High Freq Polish
         const lowPass = audioContext.createBiquadFilter();
         lowPass.type = 'lowpass';
         lowPass.frequency.value = 8000;
 
-        // D. Fast-Attack Compressor (Transient Shaper)
-        // यह सबसे ज़रूरी है "टक" को रोकने के लिए।
+        // 4. Fast Compressor (Transient Killer)
         const compressor = audioContext.createDynamicsCompressor();
         compressor.threshold.value = -24;
         compressor.knee.value = 30;
-        compressor.ratio.value = 5;      // थोड़ा सख्त किया
-        compressor.attack.value = 0.001; // ✅ Super Fast Attack (ताकि "टक" आते ही दब जाए)
+        compressor.ratio.value = 5;
+        compressor.attack.value = 0.001; 
         compressor.release.value = 0.20; 
 
-        // --- CONNECTIONS ---
-        // Mic -> HighPass -> WoodCut -> LowPass -> Compressor -> Out
+        // Connections
         source.connect(highPass);
         highPass.connect(woodCut);
         woodCut.connect(lowPass);
@@ -81,7 +94,7 @@ startBtn.onclick = async () => {
         const dest = audioContext.createMediaStreamDestination();
         compressor.connect(dest);
 
-        // --- RECORDER ---
+        // Recorder
         let options = { mimeType: 'audio/webm;codecs=opus' };
         if (!MediaRecorder.isTypeSupported(options.mimeType)) {
             options = { mimeType: 'audio/mp4' };
@@ -99,8 +112,11 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Noise & Taps Removed!";
+            statusDiv.innerText = "✅ Saved!";
             statusDiv.style.color = "#00e676";
+            
+            // Timer का रंग वापस हरा कर दें
+            timerDiv.style.color = "#00e676";
         };
 
         mediaRecorder.start();
@@ -113,16 +129,20 @@ startBtn.onclick = async () => {
         stopBtn.style.opacity = "1";
         stopBtn.style.pointerEvents = "all";
         stopBtn.style.background = "#ff3d00";
-        statusDiv.innerText = "🔴 Recording (Anti-Tap Mode)...";
+        statusDiv.innerText = "🔴 Recording...";
         statusDiv.style.color = "#ff3d00";
 
     } catch (err) {
+        clearInterval(timerInterval); // Error आये तो टाइमर रोक दो
         statusDiv.innerText = "Error: " + err.message;
         statusDiv.style.color = "red";
     }
 };
 
 stopBtn.onclick = () => {
+    // --- TIMER STOP ---
+    clearInterval(timerInterval);
+    
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
         mediaRecorder.stop();
         if(source) source.mediaStream.getTracks().forEach(track => track.stop());
@@ -156,7 +176,6 @@ function visualize() {
 
         for (let i = 0; i < bufferLength; i++) {
             barHeight = dataArray[i] / 2;
-            // पर्पल कलर (Professional Look)
             canvasCtx.fillStyle = `hsl(270, 100%, ${Math.min(barHeight + 20, 70)}%)`;
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
