@@ -13,40 +13,88 @@ let source;
 let silenceTimer;
 let isSpeaking = false;
 
-// Settings
-const VAD_THRESHOLD = 15; // आवाज़ की सेंसिटिविटी (10-30 के बीच)
-const SILENCE_DELAY = 500; // 0.5 सेकंड चुप रहने पर रिकॉर्डिंग रुकेगी
+// --- SETTINGS (आवाज़ को साफ़ करने की मशीन) ---
+const NOISE_THRESHOLD = 0.02; // इससे धीमी आवाज़ (पंखा/दूर का शोर) काट दी जाएगी
+const VOICE_MIN_FREQ = 150;   // 150Hz से नीचे की आवाज़ (पंखा/AC) बंद
+const VOICE_MAX_FREQ = 3500;  // 3500Hz से ऊपर की आवाज़ (हिस/सीटी) बंद
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Requesting Microphone...";
+        statusDiv.innerText = "Starting Voice Isolator...";
         
-        // 1. Hardware AI को Activate करना (सबसे ज़रूरी स्टेप)
+        // 1. Audio Context Setup
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        await audioContext.resume();
+
+        // 2. Microphone Input (ब्राउज़र का अपना Noise Cancel भी ऑन रखेंगे)
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
-                echoCancellation: true,   // गूंज हटाओ
-                noiseSuppression: true,   // शोर हटाओ (Hardware level)
-                autoGainControl: true,    // वॉल्यूम बैलेंस करो
-                channelCount: 1
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
             }
         });
 
-        // 2. Audio Context & Analyser (आवाज़ को देखने के लिए)
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        source = audioContext.createMediaStreamSource(stream);
+
+        // --- STEP 1: FILTERS (पंखा और हॉर्न काटने के लिए) ---
+        
+        // A. High-Pass Filter (पंखे की "धड़धड़" आवाज़ हटाएगा)
+        const lowCut = audioContext.createBiquadFilter();
+        lowCut.type = 'highpass';
+        lowCut.frequency.value = VOICE_MIN_FREQ;
+
+        // B. Low-Pass Filter (तीखी "Sss" और दूर का शोर हटाएगा)
+        const highCut = audioContext.createBiquadFilter();
+        highCut.type = 'lowpass';
+        highCut.frequency.value = VOICE_MAX_FREQ;
+
+        // --- STEP 2: NOISE GATE (टेबल की टक-टक और बैकग्राउंड शोर के लिए) ---
+        // हम एक ScriptProcessor का उपयोग करेंगे जो "Live" गेटिंग करेगा
+        const noiseGate = audioContext.createScriptProcessor(4096, 1, 1);
+        
+        noiseGate.onaudioprocess = (audioProcessingEvent) => {
+            const inputBuffer = audioProcessingEvent.inputBuffer;
+            const outputBuffer = audioProcessingEvent.outputBuffer;
+            
+            for (let channel = 0; channel < outputBuffer.numberOfChannels; channel++) {
+                const inputData = inputBuffer.getChannelData(channel);
+                const outputData = outputBuffer.getChannelData(channel);
+
+                for (let i = 0; i < inputData.length; i++) {
+                    const sample = inputData[i];
+                    
+                    // अगर आवाज़ थ्रेशोल्ड से कम है (शोर है), तो उसे 0 कर दो
+                    if (Math.abs(sample) < NOISE_THRESHOLD) {
+                        outputData[i] = 0; 
+                    } else {
+                        // अगर आवाज़ है, तो उसे जाने दो
+                        outputData[i] = sample;
+                    }
+                }
+            }
+        };
+
+        // --- STEP 3: VISUALIZER (आवाज़ देखने के लिए) ---
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
-        
-        source = audioContext.createMediaStreamSource(stream);
-        source.connect(analyser);
 
-        // 3. Media Recorder सेटअप
-        // मोबाइल और PC के लिए बेस्ट फॉर्मेट ढूंढना
+        // Connections: Mic -> HighPass -> LowPass -> NoiseGate -> Analyser -> Destination
+        source.connect(lowCut);
+        lowCut.connect(highCut);
+        highCut.connect(noiseGate);
+        noiseGate.connect(analyser);
+        
+        const dest = audioContext.createMediaStreamDestination();
+        noiseGate.connect(dest); // रिकॉर्डर को साफ़ आवाज़ भेजें
+
+        // --- STEP 4: RECORDER ---
         let options = { mimeType: 'audio/webm;codecs=opus' };
         if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-            options = { mimeType: 'audio/mp4' }; // Safari (iPhone) के लिए
+            options = { mimeType: 'audio/mp4' };
         }
 
-        mediaRecorder = new MediaRecorder(stream, options);
+        mediaRecorder = new MediaRecorder(dest.stream, options);
 
         mediaRecorder.ondataavailable = (e) => {
             if (e.data.size > 0) audioChunks.push(e.data);
@@ -58,21 +106,22 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Recording Saved!";
+            statusDiv.innerText = "✅ Clean Audio Saved!";
             statusDiv.style.color = "#00e676";
         };
 
-        // 4. Smart VAD Logic (सन्नाटा हटाने वाला जासूस)
-        mediaRecorder.start(); 
-        visualizeAndDetect(); // मॉनिटरिंग शुरू
+        mediaRecorder.start();
+        visualize(); // स्क्रीन पर वेवफॉर्म शुरू
 
-        // UI अपडेट
+        // UI Updates
         startBtn.disabled = true;
         startBtn.style.opacity = "0.5";
         stopBtn.disabled = false;
         stopBtn.style.opacity = "1";
         stopBtn.style.pointerEvents = "all";
         stopBtn.style.background = "#ff3d00";
+        statusDiv.innerText = "🔴 Recording (Filters Active)...";
+        statusDiv.style.color = "#ff3d00";
 
     } catch (err) {
         statusDiv.innerText = "Error: " + err.message;
@@ -83,7 +132,7 @@ startBtn.onclick = async () => {
 stopBtn.onclick = () => {
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
         mediaRecorder.stop();
-        source.mediaStream.getTracks().forEach(track => track.stop()); // Mic बंद
+        if(source) source.mediaStream.getTracks().forEach(track => track.stop());
         if(audioContext) audioContext.close();
     }
     
@@ -92,12 +141,12 @@ stopBtn.onclick = () => {
     stopBtn.disabled = true;
     stopBtn.style.opacity = "0.5";
     stopBtn.style.pointerEvents = "none";
-    cancelAnimationFrame(drawVisual); // एनिमेशन रोको
+    if(drawVisual) cancelAnimationFrame(drawVisual);
 };
 
-// --- जादुई फंक्शन: जो आवाज़ को देखेगा और रिकॉर्डर को कंट्रोल करेगा ---
+// --- VISUALIZER FUNCTION ---
 let drawVisual;
-function visualizeAndDetect() {
+function visualize() {
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
 
@@ -105,39 +154,6 @@ function visualizeAndDetect() {
         drawVisual = requestAnimationFrame(draw);
         analyser.getByteFrequencyData(dataArray);
 
-        // 1. औसत वॉल्यूम निकालें (Average Volume)
-        let sum = 0;
-        for (let i = 0; i < bufferLength; i++) {
-            sum += dataArray[i];
-        }
-        let averageVolume = sum / bufferLength;
-
-        // 2. VAD Logic (क्या इंसान बोल रहा है?)
-        if (averageVolume > VAD_THRESHOLD) {
-            // बोल रहा है
-            if (mediaRecorder.state === "paused") {
-                mediaRecorder.resume(); // रिकॉर्डिंग फिर से शुरू
-            }
-            statusDiv.innerText = "🔴 Recording Voice...";
-            statusDiv.style.color = "#ff3d00";
-            clearTimeout(silenceTimer); // टाइमर रीसेट
-            isSpeaking = true;
-        } else {
-            // चुप है (सन्नाटा)
-            if (isSpeaking) {
-                // तुरंत बंद मत करो, थोड़ा इंतज़ार करो (ताकि शब्द न कटें)
-                isSpeaking = false;
-                silenceTimer = setTimeout(() => {
-                    if (mediaRecorder.state === "recording") {
-                        mediaRecorder.pause(); // रिकॉर्डिंग रोको (Pause)
-                        statusDiv.innerText = "⏸️ Paused (Silence)...";
-                        statusDiv.style.color = "#aaa";
-                    }
-                }, SILENCE_DELAY);
-            }
-        }
-
-        // 3. Visualizer Draw करें (Canvas पर)
         canvasCtx.fillStyle = '#000';
         canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
         
@@ -147,16 +163,10 @@ function visualizeAndDetect() {
 
         for (let i = 0; i < bufferLength; i++) {
             barHeight = dataArray[i] / 2;
-            // अगर रिकॉर्ड हो रहा है तो हरा, नहीं तो ग्रे
-            if(mediaRecorder.state === "recording") {
-                canvasCtx.fillStyle = `rgb(${barHeight + 100}, 50, 50)`;
-            } else {
-                canvasCtx.fillStyle = `rgb(50, 50, 50)`;
-            }
+            canvasCtx.fillStyle = `rgb(${barHeight + 100}, 50, 50)`;
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
     };
-
     draw();
 }
