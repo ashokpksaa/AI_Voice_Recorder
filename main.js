@@ -10,85 +10,65 @@ let audioChunks = [];
 let audioContext;
 let analyser;
 let source;
-let silenceTimer;
-let isSpeaking = false;
-
-// --- SETTINGS (आवाज़ को साफ़ करने की मशीन) ---
-const NOISE_THRESHOLD = 0.02; // इससे धीमी आवाज़ (पंखा/दूर का शोर) काट दी जाएगी
-const VOICE_MIN_FREQ = 150;   // 150Hz से नीचे की आवाज़ (पंखा/AC) बंद
-const VOICE_MAX_FREQ = 3500;  // 3500Hz से ऊपर की आवाज़ (हिस/सीटी) बंद
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Starting Voice Isolator...";
+        statusDiv.innerText = "Setting up Studio Mode...";
         
-        // 1. Audio Context Setup
+        // 1. Audio Context
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // 2. Microphone Input (ब्राउज़र का अपना Noise Cancel भी ऑन रखेंगे)
+        // 2. Microphone Input (ब्राउज़र का हार्डवेयर नॉइज़ कैंसलेशन ON)
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true
+                noiseSuppression: true, // यह सबसे ज़रूरी है
+                autoGainControl: true   // यह वॉल्यूम बैलेंस करेगा
             }
         });
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // --- STEP 1: FILTERS (पंखा और हॉर्न काटने के लिए) ---
-        
-        // A. High-Pass Filter (पंखे की "धड़धड़" आवाज़ हटाएगा)
+        // --- STUDIO FILTERS (आवाज़ को साफ़ करने के लिए) ---
+
+        // A. High-Pass Filter (सिर्फ बहुत भारी रम्बल हटाएगा, आवाज़ का बेस नहीं)
+        // पहले यह 150Hz था, अब हम इसे 85Hz कर रहे हैं ताकि आपकी आवाज़ "पतली" न हो।
         const lowCut = audioContext.createBiquadFilter();
         lowCut.type = 'highpass';
-        lowCut.frequency.value = VOICE_MIN_FREQ;
+        lowCut.frequency.value = 85; 
 
-        // B. Low-Pass Filter (तीखी "Sss" और दूर का शोर हटाएगा)
-        const highCut = audioContext.createBiquadFilter();
-        highCut.type = 'lowpass';
-        highCut.frequency.value = VOICE_MAX_FREQ;
+        // B. Treble Boost (आवाज़ में चमक/साफ़-सफाई लाने के लिए)
+        // हम Low-Pass हटाकर High-Shelf लगा रहे हैं। यह आवाज़ को साफ़ करेगा।
+        const highShelf = audioContext.createBiquadFilter();
+        highShelf.type = 'highshelf';
+        highShelf.frequency.value = 4000; // 4kHz के ऊपर
+        highShelf.gain.value = 2;         // थोड़ी चमक बढ़ाएं
 
-        // --- STEP 2: NOISE GATE (टेबल की टक-टक और बैकग्राउंड शोर के लिए) ---
-        // हम एक ScriptProcessor का उपयोग करेंगे जो "Live" गेटिंग करेगा
-        const noiseGate = audioContext.createScriptProcessor(4096, 1, 1);
-        
-        noiseGate.onaudioprocess = (audioProcessingEvent) => {
-            const inputBuffer = audioProcessingEvent.inputBuffer;
-            const outputBuffer = audioProcessingEvent.outputBuffer;
-            
-            for (let channel = 0; channel < outputBuffer.numberOfChannels; channel++) {
-                const inputData = inputBuffer.getChannelData(channel);
-                const outputData = outputBuffer.getChannelData(channel);
+        // C. Compressor (यह सबसे ज़रूरी है - शोर को दबाने के लिए)
+        // यह शोर और आवाज़ के बीच का अंतर बढ़ा देगा।
+        const compressor = audioContext.createDynamicsCompressor();
+        compressor.threshold.value = -24; // सेंसिटिविटी
+        compressor.knee.value = 30;       // स्मूथनेस
+        compressor.ratio.value = 12;      // यह शोर को 12 गुना दबा देगा
+        compressor.attack.value = 0.003;  // तुरंत काम करेगा
+        compressor.release.value = 0.25;  // धीरे से छोड़ेगा
 
-                for (let i = 0; i < inputData.length; i++) {
-                    const sample = inputData[i];
-                    
-                    // अगर आवाज़ थ्रेशोल्ड से कम है (शोर है), तो उसे 0 कर दो
-                    if (Math.abs(sample) < NOISE_THRESHOLD) {
-                        outputData[i] = 0; 
-                    } else {
-                        // अगर आवाज़ है, तो उसे जाने दो
-                        outputData[i] = sample;
-                    }
-                }
-            }
-        };
+        // --- CONNECTIONS ---
+        // Mic -> LowCut -> HighShelf -> Compressor -> Destination
+        source.connect(lowCut);
+        lowCut.connect(highShelf);
+        highShelf.connect(compressor);
 
-        // --- STEP 3: VISUALIZER (आवाज़ देखने के लिए) ---
+        // Visualizer के लिए
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
+        compressor.connect(analyser); // हम प्रोसेस की हुई आवाज़ देखेंगे
 
-        // Connections: Mic -> HighPass -> LowPass -> NoiseGate -> Analyser -> Destination
-        source.connect(lowCut);
-        lowCut.connect(highCut);
-        highCut.connect(noiseGate);
-        noiseGate.connect(analyser);
-        
         const dest = audioContext.createMediaStreamDestination();
-        noiseGate.connect(dest); // रिकॉर्डर को साफ़ आवाज़ भेजें
+        compressor.connect(dest);
 
-        // --- STEP 4: RECORDER ---
+        // --- RECORDER ---
         let options = { mimeType: 'audio/webm;codecs=opus' };
         if (!MediaRecorder.isTypeSupported(options.mimeType)) {
             options = { mimeType: 'audio/mp4' };
@@ -106,12 +86,12 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Clean Audio Saved!";
+            statusDiv.innerText = "✅ Studio Quality Saved!";
             statusDiv.style.color = "#00e676";
         };
 
         mediaRecorder.start();
-        visualize(); // स्क्रीन पर वेवफॉर्म शुरू
+        visualize(); 
 
         // UI Updates
         startBtn.disabled = true;
@@ -120,7 +100,7 @@ startBtn.onclick = async () => {
         stopBtn.style.opacity = "1";
         stopBtn.style.pointerEvents = "all";
         stopBtn.style.background = "#ff3d00";
-        statusDiv.innerText = "🔴 Recording (Filters Active)...";
+        statusDiv.innerText = "🔴 Recording (Studio Mode)...";
         statusDiv.style.color = "#ff3d00";
 
     } catch (err) {
@@ -144,7 +124,7 @@ stopBtn.onclick = () => {
     if(drawVisual) cancelAnimationFrame(drawVisual);
 };
 
-// --- VISUALIZER FUNCTION ---
+// --- VISUALIZER ---
 let drawVisual;
 function visualize() {
     const bufferLength = analyser.frequencyBinCount;
@@ -154,7 +134,7 @@ function visualize() {
         drawVisual = requestAnimationFrame(draw);
         analyser.getByteFrequencyData(dataArray);
 
-        canvasCtx.fillStyle = '#000';
+        canvasCtx.fillStyle = '#111';
         canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
         
         const barWidth = (canvas.width / bufferLength) * 2.5;
@@ -163,7 +143,8 @@ function visualize() {
 
         for (let i = 0; i < bufferLength; i++) {
             barHeight = dataArray[i] / 2;
-            canvasCtx.fillStyle = `rgb(${barHeight + 100}, 50, 50)`;
+            // कलरफुल बार्स
+            canvasCtx.fillStyle = `hsl(${barHeight + 100}, 100%, 50%)`;
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
