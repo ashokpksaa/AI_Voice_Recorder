@@ -12,7 +12,7 @@ let audioContext;
 let analyser;
 let source;
 
-// Timer Setup
+// Timer Variables
 let startTime;
 let timerInterval;
 
@@ -26,7 +26,7 @@ function updateTimer() {
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Activating Pro Mode...";
+        statusDiv.innerText = "Activating Aggressive Noise Killer...";
         
         // Timer Start
         startTime = Date.now();
@@ -36,14 +36,14 @@ startBtn.onclick = async () => {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // --- 1. SETTINGS (Stability Fix) ---
-        // 'autoGainControl: false' कर दिया ताकि मोबाइल वॉल्यूम न छेड़े
-        // इससे filters हर बार एक जैसा काम करेंगे
+        // 1. HARDWARE SETTINGS (Best Possible)
+        // हमने 'autoGainControl' वापस ON कर दिया है क्योंकि 'Aggressive Filter' के साथ 
+        // यह शोर को बेहतर तरीके से दबाता है।
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                autoGainControl: false, // ❌ Auto Volume बंद (Stability के लिए)
+                autoGainControl: true, 
                 googEchoCancellation: true,
                 googNoiseSuppression: true,
                 googHighpassFilter: true
@@ -52,54 +52,53 @@ startBtn.onclick = async () => {
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // --- 2. VOLUME BOOSTER (Manual Gain) ---
-        // चूंकि हमने Auto Volume बंद किया है, आवाज़ धीमी हो सकती है।
-        // इसलिए हम अपनी तरफ से 3 गुना वॉल्यूम बढ़ा रहे हैं।
-        const gainNode = audioContext.createGain();
-        gainNode.gain.value = 3.0; // Volume Boost
+        // --- THE AGGRESSIVE CLEANING CHAIN ---
 
-        // --- 3. THE "90% GOOD" FILTERS (Restored) ---
+        // A. SUPER LOW CUT (Fan & Bike Engine Killer)
+        // पंखे और बाइक की भारी आवाज़ 150Hz से नीचे होती है।
+        // हमने इसे 130Hz पर सेट किया है (थोड़ी आवाज़ पतली होगी, लेकिन शोर मर जाएगा)।
+        const lowCut = audioContext.createBiquadFilter();
+        lowCut.type = 'highpass';
+        lowCut.frequency.value = 130; 
 
-        // A. High-Pass (100Hz) - Rumble Removal
-        const highPass = audioContext.createBiquadFilter();
-        highPass.type = 'highpass';
-        highPass.frequency.value = 100; 
+        // B. FAN REDUCER (Low Shelf) - **NEW**
+        // यह एक नया फिल्टर है जो "हवा" की आवाज़ (250Hz के नीचे) को 10dB और दबा देगा।
+        const fanReducer = audioContext.createBiquadFilter();
+        fanReducer.type = 'lowshelf';
+        fanReducer.frequency.value = 250;
+        fanReducer.gain.value = -10; 
 
-        // B. Echo Cutter (350Hz) - गूंज हटाने के लिए
-        const echoCut = audioContext.createBiquadFilter();
-        echoCut.type = 'peaking';
-        echoCut.frequency.value = 350;
-        echoCut.Q.value = 1.5;
-        echoCut.gain.value = -10; 
-
-        // C. Wood/Tap Cutter (500Hz) - टेबल की टक-टक हटाने के लिए
+        // C. TAP KILLER PRO (500Hz) - **UPGRADED**
+        // टेबल की टक-टक के लिए हमने पावर बढ़ा दी है (-8dB से -15dB)।
+        // Q Value को 3 कर दिया है ताकि यह सिर्फ "टक" को काटे, आपकी आवाज़ को नहीं।
         const woodCut = audioContext.createBiquadFilter();
         woodCut.type = 'peaking';
         woodCut.frequency.value = 500; 
-        woodCut.Q.value = 2;
-        woodCut.gain.value = -8;
+        woodCut.Q.value = 3.0;        // Sharp Cut
+        woodCut.gain.value = -15;     // Deep Silence for Taps
 
-        // D. Hiss Cutter (8000Hz) - सर-सर हटाने के लिए
-        const lowPass = audioContext.createBiquadFilter();
-        lowPass.type = 'lowpass';
-        lowPass.frequency.value = 8000;
+        // D. HORN/TRAFFIC CUTTER (6000Hz)
+        // बाइक के हॉर्न और तीखी आवाज़ों के लिए हमने रेंज 8000 से घटाकर 6000 कर दी है।
+        const highCut = audioContext.createBiquadFilter();
+        highCut.type = 'lowpass';
+        highCut.frequency.value = 6000;
 
-        // E. Compressor (Balanced)
+        // E. COMPRESSOR (Tight Control)
+        // शोर को ऊपर उठने से रोकने के लिए Ratio बढ़ा दिया है।
         const compressor = audioContext.createDynamicsCompressor();
-        compressor.threshold.value = -24;
-        compressor.knee.value = 30;
-        compressor.ratio.value = 5;
-        compressor.attack.value = 0.003; 
+        compressor.threshold.value = -22;
+        compressor.knee.value = 20;
+        compressor.ratio.value = 8;      // Stronger compression
+        compressor.attack.value = 0.002; 
         compressor.release.value = 0.20; 
 
         // --- CONNECTIONS ---
-        // Mic -> Booster -> HighPass -> EchoCut -> WoodCut -> LowPass -> Compressor -> Out
-        source.connect(gainNode);
-        gainNode.connect(highPass);
-        highPass.connect(echoCut);
-        echoCut.connect(woodCut);
-        woodCut.connect(lowPass);
-        lowPass.connect(compressor);
+        // Mic -> LowCut -> FanReducer -> WoodCut -> HighCut -> Compressor -> Out
+        source.connect(lowCut);
+        lowCut.connect(fanReducer);
+        fanReducer.connect(woodCut);
+        woodCut.connect(highCut);
+        highCut.connect(compressor);
 
         // Visualizer
         analyser = audioContext.createAnalyser();
@@ -127,7 +126,7 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Saved!";
+            statusDiv.innerText = "✅ Saved (Super Clean)!";
             statusDiv.style.color = "#00e676";
             timerDiv.style.color = "#00e676";
         };
@@ -142,7 +141,7 @@ startBtn.onclick = async () => {
         stopBtn.style.opacity = "1";
         stopBtn.style.pointerEvents = "all";
         stopBtn.style.background = "#ff3d00";
-        statusDiv.innerText = "🔴 Recording (Pro Mode)...";
+        statusDiv.innerText = "🔴 Recording (Aggressive Mode)...";
         statusDiv.style.color = "#ff3d00";
 
     } catch (err) {
@@ -187,7 +186,8 @@ function visualize() {
 
         for (let i = 0; i < bufferLength; i++) {
             barHeight = dataArray[i] / 2;
-            canvasCtx.fillStyle = `hsl(210, 100%, ${Math.min(barHeight + 20, 70)}%)`;
+            // Red/Orange bars specifically for "Aggressive Mode" feel
+            canvasCtx.fillStyle = `hsl(${barHeight}, 100%, 50%)`;
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
