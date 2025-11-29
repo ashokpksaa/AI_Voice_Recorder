@@ -9,75 +9,56 @@ let workletNode;
 let mediaRecorder;
 let chunks = [];
 
-// Error दिखने के लिए हेल्पर फंक्शन
 function log(msg, isError = false) {
-    console.log(msg);
     statusSpan.innerText = msg;
-    if (isError) statusSpan.style.color = "red";
-    else statusSpan.style.color = "#00f2c3"; // Greenish
+    statusSpan.style.color = isError ? "#ff4444" : "#00f2c3";
+    console.log(msg);
 }
 
 startBtn.onclick = async () => {
     try {
-        log("Starting Setup...");
-        
-        // 1. AudioContext बनाएँ
+        log("Initializing...");
+
+        // 1. Audio Context
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         audioContext = new AudioContext();
+        if (audioContext.state === 'suspended') await audioContext.resume();
 
-        // Mobile Fix: Resume Context (बहुत ज़रूरी)
-        if (audioContext.state === 'suspended') {
-            await audioContext.resume();
-        }
-
-        log("Loading AI Module...");
+        // 2. Load Processor
         try {
             await audioContext.audioWorklet.addModule('processor.js');
         } catch (e) {
-            throw new Error("processor.js लोड नहीं हुआ: " + e.message);
+            throw new Error("Processor load failed: " + e.message);
         }
 
-        // 2. Microphone मांगें
-        log("Requesting Mic...");
+        // 3. Microphone Access
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        
         const source = audioContext.createMediaStreamSource(mediaStream);
 
-        // 3. Worklet Node बनाएँ
+        // 4. Connect Node (No WASM needed now)
         workletNode = new AudioWorkletNode(audioContext, 'rnnoise-processor');
-        
-        // Processor से मैसेज सुनें (Debugging के लिए)
-        workletNode.port.onmessage = (event) => {
-            if (event.data.type === 'status') log("✅ AI Active & Running!");
-            if (event.data.type === 'error') log("⚠️ AI Error: " + event.data.message, true);
-        };
 
-        // 4. WASM लोड करें
-        log("Fetching WASM...");
-        const response = await fetch('rnnoise.wasm');
-        if (!response.ok) throw new Error(`WASM फाइल नहीं मिली! (${response.status})`);
-        
-        const wasmBytes = await response.arrayBuffer();
-        workletNode.port.postMessage({ type: 'load-wasm', wasmBytes });
-
-        // 5. कनेक्ट करें
+        // 5. Connect Graph
         const dest = audioContext.createMediaStreamDestination();
         source.connect(workletNode);
         workletNode.connect(dest);
 
-        // 6. रिकॉर्डर
+        // 6. Start Recording
         mediaRecorder = new MediaRecorder(dest.stream);
-        mediaRecorder.ondataavailable = e => chunks.push(e.data);
+        mediaRecorder.ondataavailable = e => {
+            if (e.data.size > 0) chunks.push(e.data);
+        };
         
         mediaRecorder.onstop = () => {
             const blob = new Blob(chunks, { type: 'audio/webm' });
-            audioPlayer.src = URL.createObjectURL(blob);
+            const url = URL.createObjectURL(blob);
+            audioPlayer.src = url;
             chunks = [];
-            log("Recording Saved. Play 👇");
+            log("✅ Saved! Play below to listen.");
         };
 
         mediaRecorder.start();
-        log("🔴 Recording... (Speak Now!)");
+        log("🔴 Recording... (Noise Gate Active)");
         
         startBtn.disabled = true;
         stopBtn.disabled = false;
@@ -88,7 +69,7 @@ startBtn.onclick = async () => {
 };
 
 stopBtn.onclick = () => {
-    if (mediaRecorder) mediaRecorder.stop();
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
     if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
     if (audioContext) audioContext.close();
     
