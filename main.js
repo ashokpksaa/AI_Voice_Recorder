@@ -13,9 +13,9 @@ let analyser;
 let source;
 let scriptNode;
 
-// सेटिंग्स (छेड़ें नहीं)
-const NOISE_THRESHOLD = 0.04; // गेट की लिमिट
-const VOLUME_BOOST = 4.0;     // आवाज़ 4 गुना तेज
+// --- SETTINGS (Balance Mode) ---
+const NOISE_THRESHOLD = 0.06; // पहले 0.04 था, अब 0.06 किया (ताकि सर-सर भी कट जाए)
+const VOLUME_BOOST = 2.5;     // पहले 4.0 था, अब 2.5 किया (ताकि शोर न बढ़े)
 
 // Timer
 let startTime;
@@ -31,7 +31,7 @@ function updateTimer() {
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Activating Horn Shield...";
+        statusDiv.innerText = "Activating Clean Shield...";
         
         startTime = Date.now();
         timerInterval = setInterval(updateTimer, 1000);
@@ -40,12 +40,12 @@ startBtn.onclick = async () => {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // 1. MIC INPUT (Auto Gain OFF)
+        // 1. MIC INPUT (Google AI ON, Auto Gain OFF)
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                autoGainControl: false, // ❌ OFF: ताकि हॉर्न का वॉल्यूम खुद न बढ़े
+                autoGainControl: false, // ❌ OFF ही रखें
                 googEchoCancellation: true,
                 googNoiseSuppression: true,
                 googHighpassFilter: true
@@ -54,40 +54,38 @@ startBtn.onclick = async () => {
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // 2. BOOSTER
+        // 2. BOOSTER (Controlled)
         const gainNode = audioContext.createGain();
         gainNode.gain.value = VOLUME_BOOST;
 
-        // --- 3. THE HORN KILLER FILTERS (Telephone Band) ---
+        // --- 3. FILTERS (Hiss & Horn Killer) ---
         
-        // A. Rumble Remover (Fan/Engine)
-        // 150Hz से नीचे का सब कुछ गायब
+        // A. Low Cut (Rumble Remover)
         const lowCut = audioContext.createBiquadFilter();
         lowCut.type = 'highpass';
-        lowCut.frequency.value = 150; 
+        lowCut.frequency.value = 140; 
 
-        // B. HORN KILLER (High Cut) - **MAIN FIX**
-        // हॉर्न की तीखी आवाज़ 3500Hz के ऊपर होती है।
-        // हम 3200Hz पर दीवार लगा रहे हैं। इसके ऊपर की कोई भी तीखी आवाज़ अंदर नहीं आएगी।
+        // B. High Cut (Static/Hiss Remover)
+        // इसे हमने 3000Hz कर दिया है। 
+        // यह "सर-सर" और "हॉर्न" दोनों को जड़ से काट देगा।
         const highCut = audioContext.createBiquadFilter();
         highCut.type = 'lowpass';
-        highCut.frequency.value = 3200; // Strict Cut
+        highCut.frequency.value = 3000; 
 
-        // 4. COMPRESSOR (Limiter)
-        // यह सुनिश्चित करेगा कि अगर हॉर्न बजे भी, तो वह आपकी आवाज़ से ऊपर न जाए।
+        // 4. COMPRESSOR (Smooth)
         const compressor = audioContext.createDynamicsCompressor();
-        compressor.threshold.value = -20;
-        compressor.ratio.value = 12; // भारी दबाव (ताकि हॉर्न दब जाए)
-        compressor.attack.value = 0.002;
-        compressor.release.value = 0.25;
+        compressor.threshold.value = -24;
+        compressor.ratio.value = 8;
+        compressor.attack.value = 0.003;
+        compressor.release.value = 0.15;
 
-        // 5. NOISE GATE (सन्नाटा करने के लिए)
+        // 5. STRONG NOISE GATE (Script)
         scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
         scriptNode.onaudioprocess = function(ev) {
             const input = ev.inputBuffer.getChannelData(0);
             const output = ev.outputBuffer.getChannelData(0);
             for (let i = 0; i < input.length; i++) {
-                // अगर आवाज़ 4% से कम है, तो म्यूट
+                // अगर आवाज़ 6% से कम है (Static/Hiss), तो उसे मार दो (0)
                 if (Math.abs(input[i]) < NOISE_THRESHOLD) {
                     output[i] = 0;
                 } else {
@@ -97,7 +95,6 @@ startBtn.onclick = async () => {
         };
 
         // CONNECTIONS
-        // Mic -> Booster -> LowCut -> HighCut -> Compressor -> Gate -> Out
         source.connect(gainNode);
         gainNode.connect(lowCut);
         lowCut.connect(highCut);
@@ -129,7 +126,7 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Saved (Horn Proof)!";
+            statusDiv.innerText = "✅ Saved (No Hiss)!";
             statusDiv.style.color = "#00e676";
             timerDiv.style.color = "#00e676";
         };
@@ -144,7 +141,7 @@ startBtn.onclick = async () => {
         stopBtn.style.opacity = "1";
         stopBtn.style.pointerEvents = "all";
         stopBtn.style.background = "#ff3d00";
-        statusDiv.innerText = "🔴 Recording (Anti-Horn)...";
+        statusDiv.innerText = "🔴 Recording...";
         statusDiv.style.color = "#ff3d00";
 
     } catch (err) {
@@ -170,7 +167,7 @@ stopBtn.onclick = () => {
     if(drawVisual) cancelAnimationFrame(drawVisual);
 };
 
-// Visualizer (Red Alert Style)
+// Visualizer
 let drawVisual;
 function visualize() {
     const bufferLength = analyser.frequencyBinCount;
@@ -189,7 +186,7 @@ function visualize() {
 
         for (let i = 0; i < bufferLength; i++) {
             barHeight = dataArray[i] / 2;
-            canvasCtx.fillStyle = `hsl(10, 100%, ${Math.min(barHeight + 20, 60)}%)`; 
+            canvasCtx.fillStyle = `hsl(200, 100%, ${Math.min(barHeight + 20, 60)}%)`; 
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
