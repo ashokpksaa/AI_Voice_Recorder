@@ -34,7 +34,7 @@ startBtn.onclick = async () => {
         // A. High-Pass (85Hz) - भारी रम्बल हटाने के लिए (AC/Fan)
         const lowCut = audioContext.createBiquadFilter();
         lowCut.type = 'highpass';
-        lowCut.frequency.value = 85; 
+        lowCut.frequency.value = 100; 
 
         // B. Low-Pass Filter (Hiss Remover) - यह है असली जादू
         // FM वाला शोर (Hiss) आमतौर पर 10,000Hz के ऊपर होता है।
@@ -42,7 +42,7 @@ startBtn.onclick = async () => {
         // इससे आवाज़ साफ़ रहेगी, लेकिन "सर-सर" गायब हो जाएगी।
         const hissFilter = audioContext.createBiquadFilter();
         hissFilter.type = 'lowpass'; 
-        hissFilter.frequency.value = 8000; // 8kHz से ऊपर कट (Hiss Zone)
+        hissFilter.frequency.value = 6000; // 8kHz से ऊपर कट (Hiss Zone)
         hissFilter.Q.value = 0.7;          // Smooth slope
 
         // C. Parametric EQ (Mid-Range Boost)
@@ -51,7 +51,7 @@ startBtn.onclick = async () => {
         const presenceBoost = audioContext.createBiquadFilter();
         presenceBoost.type = 'peaking';
         presenceBoost.frequency.value = 2500;
-        presenceBoost.gain.value = 3; // हल्का सा बूस्ट
+        presenceBoost.gain.value = 3.5; // हल्का सा बूस्ट
         presenceBoost.Q.value = 1.0;
 
         // D. Soft Compressor (शोर को आपकी आवाज़ के नीचे दबाने के लिए)
