@@ -13,63 +13,66 @@ let source;
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Activating Anti-Hiss Mode...";
+        statusDiv.innerText = "Initializing Noise & Echo Killer...";
         
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // 1. Microphone Input (Browser AI ON)
+        // 1. Advanced Mic Constraints (Chrome/Android Special)
+        // हम 'goog' प्रीफिक्स का यूज़ करेंगे जो Android पर ज्यादा असरदार है
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                autoGainControl: true
+                autoGainControl: true, // वॉल्यूम कम-ज्यादा करने के लिए
+                googEchoCancellation: true,
+                googExperimentalEchoCancellation: true,
+                googNoiseSuppression: true,
+                googHighpassFilter: true
             }
         });
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // --- ANTI-HISS & CLEANUP CHAIN ---
+        // --- AUDIO CLEANING CHAIN ---
 
-        // A. High-Pass (85Hz) - भारी रम्बल हटाने के लिए (AC/Fan)
-        const lowCut = audioContext.createBiquadFilter();
-        lowCut.type = 'highpass';
-        lowCut.frequency.value = 85; 
+        // A. High-Pass Filter (Rumble Remover)
+        // 100Hz से नीचे का शोर (Traffic/AC) पूरी तरह काट देंगे
+        const highPass = audioContext.createBiquadFilter();
+        highPass.type = 'highpass';
+        highPass.frequency.value = 100; 
 
-        // B. Low-Pass Filter (Hiss Remover) - यह है असली जादू
-        // FM वाला शोर (Hiss) आमतौर पर 10,000Hz के ऊपर होता है।
-        // हम 8000Hz के ऊपर का सब कुछ धीरे-धीरे काट देंगे। 
-        // इससे आवाज़ साफ़ रहेगी, लेकिन "सर-सर" गायब हो जाएगी।
-        const hissFilter = audioContext.createBiquadFilter();
-        hissFilter.type = 'lowpass'; 
-        hissFilter.frequency.value = 8000; // 8kHz से ऊपर कट (Hiss Zone)
-        hissFilter.Q.value = 0.7;          // Smooth slope
+        // B. "De-Mudder" (Echo Remover) - यह गूंज हटाएगा
+        // कमरों की गूंज अक्सर 300Hz-400Hz पर होती है। हम इसे दबा देंगे।
+        const echoCut = audioContext.createBiquadFilter();
+        echoCut.type = 'peaking';
+        echoCut.frequency.value = 350; // गूंज का केंद्र
+        echoCut.Q.value = 1.5;         // चौड़ाई
+        echoCut.gain.value = -10;      // 10dB कम कर दिया (Echo गायब)
 
-        // C. Parametric EQ (Mid-Range Boost)
-        // चूंकि हमने ऊपर से Hiss काटा है, आवाज़ थोड़ी दबी हुई लग सकती है।
-        // इसलिए हम आवाज़ की "जान" (Presense) को वापस लाएंगे (2500Hz पर)।
-        const presenceBoost = audioContext.createBiquadFilter();
-        presenceBoost.type = 'peaking';
-        presenceBoost.frequency.value = 2500;
-        presenceBoost.gain.value = 3; // हल्का सा बूस्ट
-        presenceBoost.Q.value = 1.0;
+        // C. Hiss Filter (FM Noise Remover)
+        // 7000Hz के ऊपर का तीखा शोर काट देंगे
+        const lowPass = audioContext.createBiquadFilter();
+        lowPass.type = 'lowpass';
+        lowPass.frequency.value = 7000;
 
-        // D. Soft Compressor (शोर को आपकी आवाज़ के नीचे दबाने के लिए)
+        // D. Gentle Compressor
+        // पिछली बार Ratio 8 था, जिसने शोर बढ़ा दिया था। अब हम Ratio 3 रखेंगे।
         const compressor = audioContext.createDynamicsCompressor();
-        compressor.threshold.value = -20;
-        compressor.knee.value = 20;
-        compressor.ratio.value = 8;     
-        compressor.attack.value = 0.005; 
-        compressor.release.value = 0.15; // जल्दी छोड़ेगा ताकि "Pumping" न हो
+        compressor.threshold.value = -25;
+        compressor.knee.value = 40;
+        compressor.ratio.value = 3;     // ✅ सॉफ्ट कर दिया (शोर नहीं बढ़ेगा)
+        compressor.attack.value = 0.005;
+        compressor.release.value = 0.25;
 
         // --- CONNECTIONS ---
-        // Mic -> LowCut -> HissFilter -> Presence -> Compressor -> Out
-        source.connect(lowCut);
-        lowCut.connect(hissFilter);
-        hissFilter.connect(presenceBoost);
-        presenceBoost.connect(compressor);
+        // Mic -> HighPass -> EchoCut -> LowPass -> Compressor -> Out
+        source.connect(highPass);
+        highPass.connect(echoCut);
+        echoCut.connect(lowPass);
+        lowPass.connect(compressor);
 
-        // Visualizer
+        // Visualizer Setup
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
         compressor.connect(analyser);
@@ -95,20 +98,21 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Hiss Removed! Saved.";
+            statusDiv.innerText = "✅ Crystal Clear Audio Saved!";
             statusDiv.style.color = "#00e676";
         };
 
         mediaRecorder.start();
         visualize();
 
+        // UI
         startBtn.disabled = true;
         startBtn.style.opacity = "0.5";
         stopBtn.disabled = false;
         stopBtn.style.opacity = "1";
         stopBtn.style.pointerEvents = "all";
         stopBtn.style.background = "#ff3d00";
-        statusDiv.innerText = "🔴 Recording (Anti-Hiss Active)...";
+        statusDiv.innerText = "🔴 Recording (Echo & Noise Off)...";
         statusDiv.style.color = "#ff3d00";
 
     } catch (err) {
@@ -151,7 +155,8 @@ function visualize() {
 
         for (let i = 0; i < bufferLength; i++) {
             barHeight = dataArray[i] / 2;
-            canvasCtx.fillStyle = `hsl(${barHeight + 120}, 100%, 50%)`; // Greenish bars
+            // साफ़ ब्लू कलर (Cool Look)
+            canvasCtx.fillStyle = `hsl(210, 100%, ${Math.min(barHeight + 20, 70)}%)`;
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
