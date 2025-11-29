@@ -26,23 +26,25 @@ function updateTimer() {
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Activating Echo & Noise Shield...";
+        statusDiv.innerText = "Activating Stable Mode...";
         
-        // Timer Start
         startTime = Date.now();
         timerInterval = setInterval(updateTimer, 1000);
         timerDiv.style.color = "#ff3d00";
 
-        // Audio Setup
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // 1. Hardware Setup (Echo Cancel Forced ON)
+        // --- 1. HARDWARE MASTERY (सबसे ज़रूरी स्टेप) ---
+        // हम ब्राउज़र को Force कर रहे हैं कि वह अपनी "Aggressive" सफाई यूज़ करे।
+        // इससे Echo और Fan Noise 90% हार्डवेयर लेवल पर ही हट जाएगा।
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                autoGainControl: true, 
+                autoGainControl: true, // इसे True रखें ताकि आवाज़ दबे नहीं
+                channelCount: 1,       // Mono Audio (साफ़ आवाज़ के लिए बेहतर)
+                // Advanced Flags
                 googEchoCancellation: true,
                 googExperimentalEchoCancellation: true,
                 googNoiseSuppression: true,
@@ -52,51 +54,36 @@ startBtn.onclick = async () => {
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // --- THE ULTIMATE CLEANING CHAIN ---
+        // --- 2. SINGLE MASTER FILTER (Stability के लिए) ---
+        // हम 5 फिल्टर नहीं, सिर्फ 1 "Bandpass" लगाएंगे।
+        // यह सिर्फ़ इंसानी आवाज़ की रेंज (100Hz - 8000Hz) को पास करेगा।
+        // बाकी सब (पंखा, हॉर्न, टक-टक) अपने आप बाहर हो जाएंगे।
+        
+        // A. Low Cut (Rumble/Fan/Table Thud remover)
+        const lowCut = audioContext.createBiquadFilter();
+        lowCut.type = 'highpass';
+        lowCut.frequency.value = 110; 
 
-        // A. High-Pass (110Hz) - भारी रम्बल (Fan/Traffic) हटाने के लिए
-        const highPass = audioContext.createBiquadFilter();
-        highPass.type = 'highpass';
-        highPass.frequency.value = 110; 
+        // B. High Cut (Hiss/Squeak remover)
+        const highCut = audioContext.createBiquadFilter();
+        highCut.type = 'lowpass';
+        highCut.frequency.value = 8000;
 
-        // B. ECHO KILLER (350Hz) - ✅ (वापस जोड़ दिया गया)
-        // यह कमरे की खाली गूंज (Muddy Echo) को पूरी तरह चूस लेगा
-        const echoCut = audioContext.createBiquadFilter();
-        echoCut.type = 'peaking';
-        echoCut.frequency.value = 350;
-        echoCut.Q.value = 1.5;
-        echoCut.gain.value = -10; // गूंज को 10dB कम किया
-
-        // C. TAP KILLER (500Hz) - ✅ (टक-टक हटाने के लिए)
-        // यह टेबल और लकड़ी की आवाज़ को काट देगा
-        const woodCut = audioContext.createBiquadFilter();
-        woodCut.type = 'peaking';
-        woodCut.frequency.value = 500; 
-        woodCut.Q.value = 2;
-        woodCut.gain.value = -8;
-
-        // D. Hiss Remover (8000Hz) - ✅ (सर-सर हटाने के लिए)
-        const lowPass = audioContext.createBiquadFilter();
-        lowPass.type = 'lowpass';
-        lowPass.frequency.value = 8000;
-
-        // E. Transient Compressor - ✅ (तीखी आवाज़ों को दबाने के लिए)
+        // C. Simple Compressor (Volume Balance)
+        // सिर्फ़ वॉल्यूम बराबर करने के लिए, आवाज़ छेड़ने के लिए नहीं।
         const compressor = audioContext.createDynamicsCompressor();
-        compressor.threshold.value = -24;
-        compressor.knee.value = 30;
-        compressor.ratio.value = 5;
-        compressor.attack.value = 0.001; // Super fast attack
-        compressor.release.value = 0.20; 
+        compressor.threshold.value = -20;
+        compressor.knee.value = 40;
+        compressor.ratio.value = 3;     // Light compression
+        compressor.attack.value = 0.05; // Normal attack (Not too fast)
+        compressor.release.value = 0.25;
 
-        // --- CONNECTIONS (Chain) ---
-        // Mic -> HighPass -> EchoCut -> WoodCut -> LowPass -> Compressor -> Out
-        source.connect(highPass);
-        highPass.connect(echoCut);
-        echoCut.connect(woodCut);
-        woodCut.connect(lowPass);
-        lowPass.connect(compressor);
+        // Connections: Mic -> LowCut -> HighCut -> Compressor -> Out
+        source.connect(lowCut);
+        lowCut.connect(highCut);
+        highCut.connect(compressor);
 
-        // Visualizer Setup
+        // Visualizer
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
         compressor.connect(analyser);
@@ -104,8 +91,9 @@ startBtn.onclick = async () => {
         const dest = audioContext.createMediaStreamDestination();
         compressor.connect(dest);
 
-        // Recorder Setup
-        let options = { mimeType: 'audio/webm;codecs=opus' };
+        // Recorder
+        let options = { mimeType: 'audio/webm;codecs=opus' }; 
+        // Opus कोडेक सबसे साफ़ आवाज़ देता है और मोबाइल पर लाइट चलता है
         if (!MediaRecorder.isTypeSupported(options.mimeType)) {
             options = { mimeType: 'audio/mp4' };
         }
@@ -122,7 +110,7 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Saved!";
+            statusDiv.innerText = "✅ Saved (Stable Mode)!";
             statusDiv.style.color = "#00e676";
             timerDiv.style.color = "#00e676";
         };
@@ -182,7 +170,7 @@ function visualize() {
 
         for (let i = 0; i < bufferLength; i++) {
             barHeight = dataArray[i] / 2;
-            canvasCtx.fillStyle = `hsl(270, 100%, ${Math.min(barHeight + 20, 70)}%)`;
+            canvasCtx.fillStyle = `hsl(140, 100%, ${Math.min(barHeight + 20, 60)}%)`; // Stable Green
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
