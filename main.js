@@ -13,57 +13,66 @@ let source;
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Setting up Studio Mode...";
+        statusDiv.innerText = "Activating Anti-Hiss Mode...";
         
-        // 1. Audio Context
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // 2. Microphone Input (ब्राउज़र का हार्डवेयर नॉइज़ कैंसलेशन ON)
+        // 1. Microphone Input (Browser AI ON)
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
-                noiseSuppression: true, // यह सबसे ज़रूरी है
-                autoGainControl: true   // यह वॉल्यूम बैलेंस करेगा
+                noiseSuppression: true,
+                autoGainControl: true
             }
         });
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // --- STUDIO FILTERS (आवाज़ को साफ़ करने के लिए) ---
+        // --- ANTI-HISS & CLEANUP CHAIN ---
 
-        // A. High-Pass Filter (सिर्फ बहुत भारी रम्बल हटाएगा, आवाज़ का बेस नहीं)
-        // पहले यह 150Hz था, अब हम इसे 85Hz कर रहे हैं ताकि आपकी आवाज़ "पतली" न हो।
+        // A. High-Pass (85Hz) - भारी रम्बल हटाने के लिए (AC/Fan)
         const lowCut = audioContext.createBiquadFilter();
         lowCut.type = 'highpass';
         lowCut.frequency.value = 85; 
 
-        // B. Treble Boost (आवाज़ में चमक/साफ़-सफाई लाने के लिए)
-        // हम Low-Pass हटाकर High-Shelf लगा रहे हैं। यह आवाज़ को साफ़ करेगा।
-        const highShelf = audioContext.createBiquadFilter();
-        highShelf.type = 'highshelf';
-        highShelf.frequency.value = 4000; // 4kHz के ऊपर
-        highShelf.gain.value = 2;         // थोड़ी चमक बढ़ाएं
+        // B. Low-Pass Filter (Hiss Remover) - यह है असली जादू
+        // FM वाला शोर (Hiss) आमतौर पर 10,000Hz के ऊपर होता है।
+        // हम 8000Hz के ऊपर का सब कुछ धीरे-धीरे काट देंगे। 
+        // इससे आवाज़ साफ़ रहेगी, लेकिन "सर-सर" गायब हो जाएगी।
+        const hissFilter = audioContext.createBiquadFilter();
+        hissFilter.type = 'lowpass'; 
+        hissFilter.frequency.value = 8000; // 8kHz से ऊपर कट (Hiss Zone)
+        hissFilter.Q.value = 0.7;          // Smooth slope
 
-        // C. Compressor (यह सबसे ज़रूरी है - शोर को दबाने के लिए)
-        // यह शोर और आवाज़ के बीच का अंतर बढ़ा देगा।
+        // C. Parametric EQ (Mid-Range Boost)
+        // चूंकि हमने ऊपर से Hiss काटा है, आवाज़ थोड़ी दबी हुई लग सकती है।
+        // इसलिए हम आवाज़ की "जान" (Presense) को वापस लाएंगे (2500Hz पर)।
+        const presenceBoost = audioContext.createBiquadFilter();
+        presenceBoost.type = 'peaking';
+        presenceBoost.frequency.value = 2500;
+        presenceBoost.gain.value = 3; // हल्का सा बूस्ट
+        presenceBoost.Q.value = 1.0;
+
+        // D. Soft Compressor (शोर को आपकी आवाज़ के नीचे दबाने के लिए)
         const compressor = audioContext.createDynamicsCompressor();
-        compressor.threshold.value = -24; // सेंसिटिविटी
-        compressor.knee.value = 30;       // स्मूथनेस
-        compressor.ratio.value = 12;      // यह शोर को 12 गुना दबा देगा
-        compressor.attack.value = 0.003;  // तुरंत काम करेगा
-        compressor.release.value = 0.25;  // धीरे से छोड़ेगा
+        compressor.threshold.value = -20;
+        compressor.knee.value = 20;
+        compressor.ratio.value = 8;     
+        compressor.attack.value = 0.005; 
+        compressor.release.value = 0.15; // जल्दी छोड़ेगा ताकि "Pumping" न हो
 
         // --- CONNECTIONS ---
-        // Mic -> LowCut -> HighShelf -> Compressor -> Destination
+        // Mic -> LowCut -> HissFilter -> Presence -> Compressor -> Out
         source.connect(lowCut);
-        lowCut.connect(highShelf);
-        highShelf.connect(compressor);
+        lowCut.connect(hissFilter);
+        hissFilter.connect(presenceBoost);
+        presenceBoost.connect(compressor);
 
-        // Visualizer के लिए
+        // Visualizer
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
-        compressor.connect(analyser); // हम प्रोसेस की हुई आवाज़ देखेंगे
+        compressor.connect(analyser);
 
         const dest = audioContext.createMediaStreamDestination();
         compressor.connect(dest);
@@ -86,21 +95,20 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Studio Quality Saved!";
+            statusDiv.innerText = "✅ Hiss Removed! Saved.";
             statusDiv.style.color = "#00e676";
         };
 
         mediaRecorder.start();
-        visualize(); 
+        visualize();
 
-        // UI Updates
         startBtn.disabled = true;
         startBtn.style.opacity = "0.5";
         stopBtn.disabled = false;
         stopBtn.style.opacity = "1";
         stopBtn.style.pointerEvents = "all";
         stopBtn.style.background = "#ff3d00";
-        statusDiv.innerText = "🔴 Recording (Studio Mode)...";
+        statusDiv.innerText = "🔴 Recording (Anti-Hiss Active)...";
         statusDiv.style.color = "#ff3d00";
 
     } catch (err) {
@@ -143,8 +151,7 @@ function visualize() {
 
         for (let i = 0; i < bufferLength; i++) {
             barHeight = dataArray[i] / 2;
-            // कलरफुल बार्स
-            canvasCtx.fillStyle = `hsl(${barHeight + 100}, 100%, 50%)`;
+            canvasCtx.fillStyle = `hsl(${barHeight + 120}, 100%, 50%)`; // Greenish bars
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
