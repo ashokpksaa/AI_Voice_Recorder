@@ -3,29 +3,43 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pro AI Voice Recorder</title>
+    <title>Pro AI Recorder + Timer</title>
     <style>
-        body { font-family: sans-serif; background: #111; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-        .container { text-align: center; background: #222; padding: 20px; border-radius: 15px; width: 90%; max-width: 400px; box-shadow: 0 4px 20px rgba(0,0,0,0.6); }
-        h2 { margin-bottom: 5px; color: #fff; }
-        p { color: #aaa; font-size: 0.9rem; margin-bottom: 20px; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0f0f13; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        .container { text-align: center; background: #1e1e24; padding: 25px; border-radius: 20px; width: 90%; max-width: 400px; box-shadow: 0 8px 30px rgba(0,0,0,0.7); border: 1px solid #333; }
         
-        /* Visualizer Canvas */
-        canvas { width: 100%; height: 80px; background: #000; border-radius: 8px; margin: 15px 0; border: 1px solid #333; }
+        h2 { margin: 0 0 10px 0; color: #fff; font-weight: 600; letter-spacing: 1px; }
+        p { color: #888; font-size: 0.85rem; margin-bottom: 20px; }
         
-        .status { font-size: 0.9rem; margin-bottom: 15px; font-weight: bold; min-height: 20px; }
+        /* TIMER STYLE (New) */
+        #timer {
+            font-size: 3rem;
+            font-weight: bold;
+            font-family: 'Courier New', monospace; /* Monospace ताकि नंबर हिले नहीं */
+            color: #00e676;
+            margin: 10px 0;
+            text-shadow: 0 0 10px rgba(0, 230, 118, 0.4);
+        }
+
+        canvas { width: 100%; height: 60px; background: #111; border-radius: 10px; margin-bottom: 15px; border: 1px solid #333; }
         
-        button { padding: 15px 30px; border: none; border-radius: 50px; font-size: 16px; font-weight: bold; cursor: pointer; margin: 5px; transition: 0.2s; width: 100%; }
-        #btnStart { background: #00e676; color: #000; }
-        #btnStop { background: #ff3d00; color: white; opacity: 0.5; pointer-events: none; }
+        .status { font-size: 0.9rem; margin-bottom: 15px; font-weight: bold; min-height: 20px; letter-spacing: 0.5px; }
         
-        audio { width: 100%; margin-top: 20px; display: none; }
+        button { padding: 14px 28px; border: none; border-radius: 50px; font-size: 16px; font-weight: bold; cursor: pointer; margin: 8px; transition: 0.2s; width: 100%; text-transform: uppercase; }
+        #btnStart { background: #00e676; color: #000; box-shadow: 0 4px 15px rgba(0, 230, 118, 0.3); }
+        #btnStart:active { transform: scale(0.98); }
+        
+        #btnStop { background: #ff3d00; color: white; opacity: 0.5; pointer-events: none; box-shadow: 0 4px 15px rgba(255, 61, 0, 0.3); }
+        
+        audio { width: 100%; margin-top: 20px; display: none; border-radius: 10px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>🎙️ Pro Smart Recorder</h2>
-        <p>Auto-Removes Silence & Noise</p>
+        <h2>🎙️ Studio Recorder</h2>
+        <p>Noise Cancelled • Anti-Tap • Echo Free</p>
+
+        <div id="timer">00:00</div>
 
         <canvas id="visualizer"></canvas>
         <div class="status" id="status">Ready to Record</div>
