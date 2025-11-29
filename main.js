@@ -1,7 +1,6 @@
 const startBtn = document.getElementById('btnStart');
 const stopBtn = document.getElementById('btnStop');
 const statusDiv = document.getElementById('status');
-const timerDiv = document.getElementById('timer');
 const canvas = document.getElementById('visualizer');
 const audioPlayer = document.getElementById('audioPlayer');
 const canvasCtx = canvas.getContext('2d');
@@ -12,76 +11,64 @@ let audioContext;
 let analyser;
 let source;
 
-// Timer
-let startTime;
-let timerInterval;
-
-function updateTimer() {
-    const elapsed = Date.now() - startTime;
-    const totalSeconds = Math.floor(elapsed / 1000);
-    const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
-    const seconds = (totalSeconds % 60).toString().padStart(2, '0');
-    timerDiv.innerText = `${minutes}:${seconds}`;
-}
-
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Activating Pure Voice Mode...";
+        statusDiv.innerText = "Activating Anti-Hiss Mode...";
         
-        startTime = Date.now();
-        timerInterval = setInterval(updateTimer, 1000);
-        timerDiv.style.color = "#ff3d00";
-
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // 1. HARDWARE AI (Auto Gain ON)
-        // हम वापस हार्डवेयर पर भरोसा कर रहे हैं क्योंकि वह "सर-सर" नहीं करता।
+        // 1. Microphone Input (Browser AI ON)
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                autoGainControl: true, // ✅ ON (ताकि मोबाइल खुद नॉइज़ फ्लोर को दबाए)
-                googEchoCancellation: true,
-                googNoiseSuppression: true,
-                googHighpassFilter: true
+                autoGainControl: true
             }
         });
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // --- THE "RADIO" CLEANER CHAIN ---
-        // हम कोई Volume Boost नहीं लगा रहे। जो आ रहा है, वही साफ़ होगा।
+        // --- ANTI-HISS & CLEANUP CHAIN ---
 
-        // A. Low Cut (Fan/Rumble Killer)
-        // 150Hz के नीचे का शोर गायब
+        // A. High-Pass (85Hz) - भारी रम्बल हटाने के लिए (AC/Fan)
         const lowCut = audioContext.createBiquadFilter();
         lowCut.type = 'highpass';
-        lowCut.frequency.value = 150; 
+        lowCut.frequency.value = 85; 
 
-        // B. High Cut (HISS & HORN KILLER) - **Main Fix**
-        // "सर-सर" (Hiss) 4000Hz+ पर होती है।
-        // हॉर्न 3500Hz+ पर होता है।
-        // हम 3000Hz पर सबको काट रहे हैं। इसके ऊपर कुछ नहीं आएगा।
-        const highCut = audioContext.createBiquadFilter();
-        highCut.type = 'lowpass';
-        highCut.frequency.value = 3000; 
+        // B. Low-Pass Filter (Hiss Remover) - यह है असली जादू
+        // FM वाला शोर (Hiss) आमतौर पर 10,000Hz के ऊपर होता है।
+        // हम 8000Hz के ऊपर का सब कुछ धीरे-धीरे काट देंगे। 
+        // इससे आवाज़ साफ़ रहेगी, लेकिन "सर-सर" गायब हो जाएगी।
+        const hissFilter = audioContext.createBiquadFilter();
+        hissFilter.type = 'lowpass'; 
+        hissFilter.frequency.value = 8000; // 8kHz से ऊपर कट (Hiss Zone)
+        hissFilter.Q.value = 0.7;          // Smooth slope
 
-        // C. Compressor (Leveler)
-        // यह वॉल्यूम नहीं बढ़ाएगा, बस आपकी आवाज़ को एक बराबर रखेगा।
+        // C. Parametric EQ (Mid-Range Boost)
+        // चूंकि हमने ऊपर से Hiss काटा है, आवाज़ थोड़ी दबी हुई लग सकती है।
+        // इसलिए हम आवाज़ की "जान" (Presense) को वापस लाएंगे (2500Hz पर)।
+        const presenceBoost = audioContext.createBiquadFilter();
+        presenceBoost.type = 'peaking';
+        presenceBoost.frequency.value = 2500;
+        presenceBoost.gain.value = 3; // हल्का सा बूस्ट
+        presenceBoost.Q.value = 1.0;
+
+        // D. Soft Compressor (शोर को आपकी आवाज़ के नीचे दबाने के लिए)
         const compressor = audioContext.createDynamicsCompressor();
         compressor.threshold.value = -20;
-        compressor.knee.value = 40;
-        compressor.ratio.value = 5; 
-        compressor.attack.value = 0.005;
-        compressor.release.value = 0.25;
+        compressor.knee.value = 20;
+        compressor.ratio.value = 8;     
+        compressor.attack.value = 0.005; 
+        compressor.release.value = 0.15; // जल्दी छोड़ेगा ताकि "Pumping" न हो
 
         // --- CONNECTIONS ---
-        // Mic -> LowCut -> HighCut -> Compressor -> Out
+        // Mic -> LowCut -> HissFilter -> Presence -> Compressor -> Out
         source.connect(lowCut);
-        lowCut.connect(highCut);
-        highCut.connect(compressor);
-        
+        lowCut.connect(hissFilter);
+        hissFilter.connect(presenceBoost);
+        presenceBoost.connect(compressor);
+
         // Visualizer
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
@@ -90,7 +77,7 @@ startBtn.onclick = async () => {
         const dest = audioContext.createMediaStreamDestination();
         compressor.connect(dest);
 
-        // Recorder
+        // --- RECORDER ---
         let options = { mimeType: 'audio/webm;codecs=opus' };
         if (!MediaRecorder.isTypeSupported(options.mimeType)) {
             options = { mimeType: 'audio/mp4' };
@@ -108,33 +95,29 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Saved (Zero Hiss)!";
+            statusDiv.innerText = "✅ Hiss Removed! Saved.";
             statusDiv.style.color = "#00e676";
-            timerDiv.style.color = "#00e676";
         };
 
         mediaRecorder.start();
         visualize();
 
-        // UI
         startBtn.disabled = true;
         startBtn.style.opacity = "0.5";
         stopBtn.disabled = false;
         stopBtn.style.opacity = "1";
         stopBtn.style.pointerEvents = "all";
         stopBtn.style.background = "#ff3d00";
-        statusDiv.innerText = "🔴 Recording...";
+        statusDiv.innerText = "🔴 Recording (Anti-Hiss Active)...";
         statusDiv.style.color = "#ff3d00";
 
     } catch (err) {
-        clearInterval(timerInterval);
         statusDiv.innerText = "Error: " + err.message;
         statusDiv.style.color = "red";
     }
 };
 
 stopBtn.onclick = () => {
-    clearInterval(timerInterval);
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
         mediaRecorder.stop();
         if(source) source.mediaStream.getTracks().forEach(track => track.stop());
@@ -149,7 +132,7 @@ stopBtn.onclick = () => {
     if(drawVisual) cancelAnimationFrame(drawVisual);
 };
 
-// Visualizer
+// --- VISUALIZER ---
 let drawVisual;
 function visualize() {
     const bufferLength = analyser.frequencyBinCount;
@@ -168,7 +151,7 @@ function visualize() {
 
         for (let i = 0; i < bufferLength; i++) {
             barHeight = dataArray[i] / 2;
-            canvasCtx.fillStyle = `hsl(160, 100%, ${Math.min(barHeight + 20, 60)}%)`; 
+            canvasCtx.fillStyle = `hsl(${barHeight + 120}, 100%, 50%)`; // Greenish bars
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
