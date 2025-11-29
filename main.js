@@ -13,18 +13,18 @@ let source;
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Initializing Noise & Echo Killer...";
+        statusDiv.innerText = "Activating Transient Killer...";
         
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // 1. Advanced Mic Constraints (Chrome/Android Special)
-        // हम 'goog' प्रीफिक्स का यूज़ करेंगे जो Android पर ज्यादा असरदार है
+        // 1. Microphone Input (Hardware AI Forced ON)
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                autoGainControl: true, // वॉल्यूम कम-ज्यादा करने के लिए
+                autoGainControl: true, 
+                // Advanced Android Flags
                 googEchoCancellation: true,
                 googExperimentalEchoCancellation: true,
                 googNoiseSuppression: true,
@@ -34,45 +34,46 @@ startBtn.onclick = async () => {
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // --- AUDIO CLEANING CHAIN ---
+        // --- SURGICAL AUDIO CHAIN ---
 
-        // A. High-Pass Filter (Rumble Remover)
-        // 100Hz से नीचे का शोर (Traffic/AC) पूरी तरह काट देंगे
+        // A. High-Pass Filter (Low Thud Killer)
+        // टेबल की "धमक" (Thud) को काटने के लिए हमने इसे 100Hz से बढ़ाकर 110Hz कर दिया है।
         const highPass = audioContext.createBiquadFilter();
         highPass.type = 'highpass';
-        highPass.frequency.value = 100; 
+        highPass.frequency.value = 110; 
 
-        // B. "De-Mudder" (Echo Remover) - यह गूंज हटाएगा
-        // कमरों की गूंज अक्सर 300Hz-400Hz पर होती है। हम इसे दबा देंगे।
-        const echoCut = audioContext.createBiquadFilter();
-        echoCut.type = 'peaking';
-        echoCut.frequency.value = 350; // गूंज का केंद्र
-        echoCut.Q.value = 1.5;         // चौड़ाई
-        echoCut.gain.value = -10;      // 10dB कम कर दिया (Echo गायब)
+        // B. "Wood-Cut" Filter (Table Resonance Remover)
+        // टेबल की "टक-टक" अक्सर 500Hz के आसपास गूंजती है।
+        // हम वहां एक गड्ढा (Dip) बना रहे हैं।
+        const woodCut = audioContext.createBiquadFilter();
+        woodCut.type = 'peaking';
+        woodCut.frequency.value = 500; 
+        woodCut.Q.value = 2;          // Sharpness
+        woodCut.gain.value = -8;      // 8dB की कमी (टक-टक दबेगी)
 
-        // C. Hiss Filter (FM Noise Remover)
-        // 7000Hz के ऊपर का तीखा शोर काट देंगे
+        // C. High-Frequency Polish
+        // 8000Hz से ऊपर का हिस हटाएंगे
         const lowPass = audioContext.createBiquadFilter();
         lowPass.type = 'lowpass';
-        lowPass.frequency.value = 7000;
+        lowPass.frequency.value = 8000;
 
-        // D. Gentle Compressor
-        // पिछली बार Ratio 8 था, जिसने शोर बढ़ा दिया था। अब हम Ratio 3 रखेंगे।
+        // D. Fast-Attack Compressor (Transient Shaper)
+        // यह सबसे ज़रूरी है "टक" को रोकने के लिए।
         const compressor = audioContext.createDynamicsCompressor();
-        compressor.threshold.value = -25;
-        compressor.knee.value = 40;
-        compressor.ratio.value = 3;     // ✅ सॉफ्ट कर दिया (शोर नहीं बढ़ेगा)
-        compressor.attack.value = 0.005;
-        compressor.release.value = 0.25;
+        compressor.threshold.value = -24;
+        compressor.knee.value = 30;
+        compressor.ratio.value = 5;      // थोड़ा सख्त किया
+        compressor.attack.value = 0.001; // ✅ Super Fast Attack (ताकि "टक" आते ही दब जाए)
+        compressor.release.value = 0.20; 
 
         // --- CONNECTIONS ---
-        // Mic -> HighPass -> EchoCut -> LowPass -> Compressor -> Out
+        // Mic -> HighPass -> WoodCut -> LowPass -> Compressor -> Out
         source.connect(highPass);
-        highPass.connect(echoCut);
-        echoCut.connect(lowPass);
+        highPass.connect(woodCut);
+        woodCut.connect(lowPass);
         lowPass.connect(compressor);
 
-        // Visualizer Setup
+        // Visualizer
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
         compressor.connect(analyser);
@@ -98,7 +99,7 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Crystal Clear Audio Saved!";
+            statusDiv.innerText = "✅ Noise & Taps Removed!";
             statusDiv.style.color = "#00e676";
         };
 
@@ -112,7 +113,7 @@ startBtn.onclick = async () => {
         stopBtn.style.opacity = "1";
         stopBtn.style.pointerEvents = "all";
         stopBtn.style.background = "#ff3d00";
-        statusDiv.innerText = "🔴 Recording (Echo & Noise Off)...";
+        statusDiv.innerText = "🔴 Recording (Anti-Tap Mode)...";
         statusDiv.style.color = "#ff3d00";
 
     } catch (err) {
@@ -155,8 +156,8 @@ function visualize() {
 
         for (let i = 0; i < bufferLength; i++) {
             barHeight = dataArray[i] / 2;
-            // साफ़ ब्लू कलर (Cool Look)
-            canvasCtx.fillStyle = `hsl(210, 100%, ${Math.min(barHeight + 20, 70)}%)`;
+            // पर्पल कलर (Professional Look)
+            canvasCtx.fillStyle = `hsl(270, 100%, ${Math.min(barHeight + 20, 70)}%)`;
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
