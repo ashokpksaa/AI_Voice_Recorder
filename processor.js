@@ -1,19 +1,14 @@
-/**
- * Advanced RNNoise Processor with Circular Buffer
- * Handles the mismatch between WebAudio (128 frames) and RNNoise (480 frames)
- */
-
 class RNNoiseProcessor extends AudioWorkletProcessor {
     constructor() {
         super();
         this.isRunning = false;
         
         // Buffers
-        this.inputBuffer = new Float32Array(480); // To store incoming audio until we have 480
-        this.outputBuffer = new Float32Array(480); // To store processed audio
+        this.inputBuffer = new Float32Array(480); 
+        this.outputBuffer = new Float32Array(480); 
         this.inputBufferPtr = 0;
         this.outputBufferPtr = 0;
-        this.outputBufferCount = 0; // How much processed audio is ready to send back
+        this.outputBufferCount = 0; 
 
         // WASM Pointers
         this.wasmInstance = null;
@@ -40,59 +35,56 @@ class RNNoiseProcessor extends AudioWorkletProcessor {
             });
 
             this.wasmInstance = results.instance;
-            const { rnnoise_create, rnnoise_process_frame, malloc, memory } = this.wasmInstance.exports;
+            const { rnnoise_create, malloc, memory } = this.wasmInstance.exports;
 
             this.context = rnnoise_create(null);
-            this.ptrIn = malloc(480 * 4); // 4 bytes per float
+            this.ptrIn = malloc(480 * 4); 
             this.ptrOut = malloc(480 * 4);
             this.heapFloat32 = new Float32Array(memory.buffer);
             
             this.isRunning = true;
-            console.log("✅ AI Model Loaded & Buffers Ready");
+            // Worklet को खबर दें कि सब ठीक है
+            this.port.postMessage({ type: 'status', message: 'AI_LOADED' });
         } catch (err) {
-            console.error("Failed to load WASM:", err);
+            this.port.postMessage({ type: 'error', message: err.message });
         }
     }
 
     process(inputs, outputs, parameters) {
-        // If mic is off or AI not loaded, pass silence or stop
-        if (!inputs[0] || !inputs[0][0]) return true;
-        
-        const inputChannel = inputs[0][0];  // Raw Mic Data (128 samples)
-        const outputChannel = outputs[0][0]; // Output to speaker/recorder (128 samples)
+        const inputChannel = inputs[0][0];
+        const outputChannel = outputs[0][0];
 
+        // अगर इनपुट नहीं है, तो बाहर निकलो
+        if (!inputChannel || !outputChannel) return true;
+
+        // --- SAFETY BYPASS ---
+        // अगर AI अभी लोड नहीं हुआ है, तो सीधी आवाज़ पास करो (ताकि सन्नाटा न रहे)
         if (!this.isRunning) {
-            // AI ready nahi hai to silent return karein (ya bypass karein)
+            outputChannel.set(inputChannel);
             return true;
         }
 
-        // --- STEP 1: Fill Input Buffer ---
+        // --- AI PROCESSING (अगर लोड हो गया है) ---
+        // 1. Input Buffer भरें
         for (let i = 0; i < inputChannel.length; i++) {
             this.inputBuffer[this.inputBufferPtr] = inputChannel[i];
             this.inputBufferPtr++;
 
-            // Agar 480 samples jama ho gaye, to AI se process karao
             if (this.inputBufferPtr === 480) {
                 this.processFrame();
-                this.inputBufferPtr = 0; // Reset counter
+                this.inputBufferPtr = 0;
             }
         }
 
-        // --- STEP 2: Send Output Buffer ---
+        // 2. Output Buffer भेजें
         for (let i = 0; i < outputChannel.length; i++) {
-            // Agar hamare paas processed data hai
             if (this.outputBufferCount > 0) {
                 outputChannel[i] = this.outputBuffer[this.outputBufferPtr];
                 this.outputBufferPtr++;
                 this.outputBufferCount--;
-
-                // Agar output buffer khatam ho gaya, reset pointer
-                if (this.outputBufferPtr === 480) {
-                    this.outputBufferPtr = 0;
-                }
+                if (this.outputBufferPtr === 480) this.outputBufferPtr = 0;
             } else {
-                // Agar data ready nahi hai to silence bhejo (buffering lag)
-                outputChannel[i] = 0;
+                outputChannel[i] = 0; 
             }
         }
 
@@ -100,29 +92,22 @@ class RNNoiseProcessor extends AudioWorkletProcessor {
     }
 
     processFrame() {
-        // 1. Copy data to WASM Memory
+        // AI Logic
         for (let i = 0; i < 480; i++) {
-            // Float (-1 to 1) ko PCM 16-bit me badalna (RNNoise requirement)
-            // Scaling factor 32768.0
             let val = this.inputBuffer[i] * 32768.0;
             this.heapFloat32[(this.ptrIn >> 2) + i] = val;
         }
 
-        // 2. Call AI Function
         this.wasmInstance.exports.rnnoise_process_frame(
             this.context,
             this.ptrOut,
             this.ptrIn
         );
 
-        // 3. Copy result back from WASM Memory
         for (let i = 0; i < 480; i++) {
-            // Wapas Float me badalna
             let val = this.heapFloat32[(this.ptrOut >> 2) + i];
             this.outputBuffer[i] = val / 32768.0;
         }
-
-        // Batao ki naya data ready hai
         this.outputBufferCount = 480;
         this.outputBufferPtr = 0;
     }
