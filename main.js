@@ -6,17 +6,14 @@ const canvas = document.getElementById('visualizer');
 const audioPlayer = document.getElementById('audioPlayer');
 const canvasCtx = canvas.getContext('2d');
 
-// SLIDERS
-const slLow = document.getElementById('slLow');   // Fan
-const slHigh = document.getElementById('slHigh'); // Horn/Hiss
-const slGate = document.getElementById('slGate'); // Silence
-const slVol = document.getElementById('slVol');   // Volume
+// SLIDERS & VALUES
+const slLow = document.getElementById('slLow');
+const slHigh = document.getElementById('slHigh');
+const slMid = document.getElementById('slMid');
 
-// VALUE LABELS
 const valLow = document.getElementById('valLow');
 const valHigh = document.getElementById('valHigh');
-const valGate = document.getElementById('valGate');
-const valVol = document.getElementById('valVol');
+const valMid = document.getElementById('valMid');
 
 let mediaRecorder;
 let audioChunks = [];
@@ -24,33 +21,30 @@ let audioContext;
 let analyser;
 let source;
 
-// NODES (इन्हें ग्लोबल रखा है ताकि स्लाइडर इन्हें बदल सकें)
+// NODES (इन्हें बाहर रखा है ताकि स्लाइडर इन्हें बदल सकें)
 let lowCutNode;
 let highCutNode;
-let gainNode;
-let scriptNode;
-let noiseThreshold = 0.04; // Default
+let presenceNode; // Voice Boost
+let hissFilterNode;
 
 // Timer
 let startTime;
 let timerInterval;
 
-// --- SLIDER EVENTS (Real-time updates) ---
+// --- SLIDER EVENTS (Real-time Change) ---
 slLow.oninput = (e) => { 
     if(lowCutNode) lowCutNode.frequency.value = e.target.value; 
     valLow.innerText = e.target.value; 
 };
 slHigh.oninput = (e) => { 
-    if(highCutNode) highCutNode.frequency.value = e.target.value; 
+    // यह 'hissFilter' को कंट्रोल करेगा
+    if(hissFilterNode) hissFilterNode.frequency.value = e.target.value; 
     valHigh.innerText = e.target.value; 
 };
-slVol.oninput = (e) => { 
-    if(gainNode) gainNode.gain.value = e.target.value; 
-    valVol.innerText = e.target.value; 
-};
-slGate.oninput = (e) => { 
-    noiseThreshold = parseFloat(e.target.value); 
-    valGate.innerText = noiseThreshold; 
+slMid.oninput = (e) => { 
+    // यह 'presenceBoost' को कंट्रोल करेगा
+    if(presenceNode) presenceNode.frequency.value = e.target.value; 
+    valMid.innerText = e.target.value; 
 };
 
 function updateTimer() {
@@ -63,19 +57,21 @@ function updateTimer() {
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Live Testing Mode...";
+        statusDiv.innerText = "Recording (Adjust Sliders Now)...";
+        
         startTime = Date.now();
         timerInterval = setInterval(updateTimer, 1000);
-        
+        timerDiv.style.color = "#ff3d00";
+
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // Mic Setup
+        // 1. Microphone Input (Browser AI ON)
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                autoGainControl: false, // OFF for manual control
+                autoGainControl: true,
                 googEchoCancellation: true,
                 googNoiseSuppression: true,
                 googHighpassFilter: true
@@ -84,51 +80,48 @@ startBtn.onclick = async () => {
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // --- FILTERS SETUP ---
-        
-        // 1. Volume Booster
-        gainNode = audioContext.createGain();
-        gainNode.gain.value = slVol.value;
+        // --- FILTER CHAIN (From your favorite code) ---
 
-        // 2. Low Cut (Fan)
+        // A. High-Pass (Fan Remover) -> Controlled by Slider 1
         lowCutNode = audioContext.createBiquadFilter();
         lowCutNode.type = 'highpass';
-        lowCutNode.frequency.value = slLow.value;
+        lowCutNode.frequency.value = slLow.value; // (Default 85Hz)
 
-        // 3. High Cut (Horn/Hiss)
-        highCutNode = audioContext.createBiquadFilter();
-        highCutNode.type = 'lowpass';
-        highCutNode.frequency.value = slHigh.value;
+        // B. Low-Pass Filter (Hiss Remover) -> Controlled by Slider 2
+        hissFilterNode = audioContext.createBiquadFilter();
+        hissFilterNode.type = 'lowpass'; 
+        hissFilterNode.frequency.value = slHigh.value; // (Default 8000Hz)
+        hissFilterNode.Q.value = 0.7;
 
-        // 4. Noise Gate (Manual)
-        scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
-        noiseThreshold = parseFloat(slGate.value);
+        // C. Parametric EQ (Voice Boost) -> Controlled by Slider 3
+        presenceNode = audioContext.createBiquadFilter();
+        presenceNode.type = 'peaking';
+        presenceNode.frequency.value = slMid.value; // (Default 2500Hz)
+        presenceNode.gain.value = 3; 
+        presenceNode.Q.value = 1.0;
 
-        scriptNode.onaudioprocess = function(ev) {
-            const input = ev.inputBuffer.getChannelData(0);
-            const output = ev.outputBuffer.getChannelData(0);
-            for (let i = 0; i < input.length; i++) {
-                // स्लाइडर की वैल्यू से चेक करो
-                if (Math.abs(input[i]) < noiseThreshold) {
-                    output[i] = 0; // Mute
-                } else {
-                    output[i] = input[i];
-                }
-            }
-        };
+        // D. Soft Compressor (Fixed Settings)
+        const compressor = audioContext.createDynamicsCompressor();
+        compressor.threshold.value = -20;
+        compressor.knee.value = 20;
+        compressor.ratio.value = 8;     
+        compressor.attack.value = 0.005; 
+        compressor.release.value = 0.15;
 
-        // CONNECTIONS
-        source.connect(gainNode);
-        gainNode.connect(lowCutNode);
-        lowCutNode.connect(highCutNode);
-        highCutNode.connect(scriptNode);
-        
+        // --- CONNECTIONS ---
+        // Mic -> LowCut -> HissFilter -> Presence -> Compressor -> Out
+        source.connect(lowCutNode);
+        lowCutNode.connect(hissFilterNode);
+        hissFilterNode.connect(presenceNode);
+        presenceNode.connect(compressor);
+
+        // Visualizer
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
-        scriptNode.connect(analyser);
+        compressor.connect(analyser);
 
         const dest = audioContext.createMediaStreamDestination();
-        scriptNode.connect(dest);
+        compressor.connect(dest);
 
         // RECORDER
         let options = { mimeType: 'audio/webm;codecs=opus' };
@@ -146,7 +139,9 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Test Saved!";
+            statusDiv.innerText = "✅ Saved! Check the sliders.";
+            statusDiv.style.color = "#00e676";
+            timerDiv.style.color = "#00e676";
         };
 
         mediaRecorder.start();
@@ -175,6 +170,7 @@ stopBtn.onclick = () => {
     stopBtn.style.pointerEvents = "none";
 };
 
+// Visualizer
 function visualize() {
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
@@ -188,7 +184,7 @@ function visualize() {
         let barWidth = (canvas.width / bufferLength) * 2.5;
         for (let i = 0; i < bufferLength; i++) {
             let barHeight = dataArray[i] / 2;
-            canvasCtx.fillStyle = `hsl(${barHeight + 100},100%,50%)`;
+            canvasCtx.fillStyle = `hsl(${barHeight + 120},100%,50%)`;
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
