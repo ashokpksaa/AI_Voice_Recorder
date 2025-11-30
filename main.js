@@ -4,6 +4,7 @@ const statusDiv = document.getElementById('status');
 const timerDiv = document.getElementById('timer');
 const canvas = document.getElementById('visualizer');
 const audioPlayer = document.getElementById('audioPlayer');
+const chkMonitor = document.getElementById('chkMonitor');
 const canvasCtx = canvas.getContext('2d');
 
 // SLIDERS
@@ -22,43 +23,40 @@ let audioContext;
 let analyser;
 let source;
 
-// NODES (Global Variables)
-// हम इन्हें 'var' बना रहे हैं ताकि ये कभी भी access हो सकें
+// NODES (Global for Live Tuning)
 var lowCutNode = null;
 var highCutNode = null;
-var presenceNode = null; 
+var presenceNode = null;
+var dest = null; // Destination Node
 
 let startTime;
 let timerInterval;
 
-// --- SLIDER LOGIC (Ye ab 100% kaam karega) ---
+// --- INSTANT SLIDER UPDATE ---
+slLow.oninput = function() {
+    valLow.innerText = this.value;
+    if(lowCutNode) lowCutNode.frequency.value = this.value;
+};
+slHigh.oninput = function() {
+    valHigh.innerText = this.value;
+    if(highCutNode) highCutNode.frequency.value = this.value;
+};
+slMid.oninput = function() {
+    valMid.innerText = this.value;
+    if(presenceNode) presenceNode.frequency.value = this.value;
+};
 
-// 1. Fan Cut Slider
-slLow.addEventListener('input', function() {
-    let val = parseFloat(this.value); // Number mein convert kiya
-    valLow.innerText = val;
-    if (lowCutNode) {
-        lowCutNode.frequency.setValueAtTime(val, audioContext.currentTime);
+// --- MONITOR SWITCH ---
+chkMonitor.onchange = function() {
+    if(!audioContext) return;
+    if(this.checked) {
+        // Connect to Speakers (Headphones)
+        dest.connect(audioContext.destination);
+    } else {
+        // Disconnect from Speakers
+        try { dest.disconnect(audioContext.destination); } catch(e){}
     }
-});
-
-// 2. Hiss Cut Slider
-slHigh.addEventListener('input', function() {
-    let val = parseFloat(this.value);
-    valHigh.innerText = val;
-    if (highCutNode) {
-        highCutNode.frequency.setValueAtTime(val, audioContext.currentTime);
-    }
-});
-
-// 3. Voice Boost Slider
-slMid.addEventListener('input', function() {
-    let val = parseFloat(this.value);
-    valMid.innerText = val;
-    if (presenceNode) {
-        presenceNode.frequency.setValueAtTime(val, audioContext.currentTime);
-    }
-});
+};
 
 function updateTimer() {
     const elapsed = Date.now() - startTime;
@@ -70,8 +68,7 @@ function updateTimer() {
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "🔴 Live Tuning Active...";
-        
+        statusDiv.innerText = "🔴 LIVE TUNING MODE";
         startTime = Date.now();
         timerInterval = setInterval(updateTimer, 1000);
         timerDiv.style.color = "#ff3d00";
@@ -84,7 +81,7 @@ startBtn.onclick = async () => {
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                autoGainControl: true,
+                autoGainControl: false, // OFF for pure testing
                 googEchoCancellation: true,
                 googNoiseSuppression: true,
                 googHighpassFilter: true
@@ -93,26 +90,26 @@ startBtn.onclick = async () => {
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // --- CREATING FILTERS ---
-
-        // A. Fan Cut (High Pass)
+        // --- FILTERS ---
+        
+        // 1. Fan Cut (High Pass)
         lowCutNode = audioContext.createBiquadFilter();
         lowCutNode.type = 'highpass';
-        lowCutNode.frequency.value = parseFloat(slLow.value);
+        lowCutNode.frequency.value = slLow.value;
 
-        // B. Hiss Cut (Low Pass)
+        // 2. Hiss Cut (Low Pass)
         highCutNode = audioContext.createBiquadFilter();
         highCutNode.type = 'lowpass';
-        highCutNode.frequency.value = parseFloat(slHigh.value);
+        highCutNode.frequency.value = slHigh.value;
 
-        // C. Voice Boost (Peaking)
+        // 3. Voice Sharpness (Peaking)
         presenceNode = audioContext.createBiquadFilter();
         presenceNode.type = 'peaking';
-        presenceNode.frequency.value = parseFloat(slMid.value);
-        presenceNode.gain.value = 5; // Strong Boost (Taki slide karne par fark dikhe)
+        presenceNode.frequency.value = slMid.value;
+        presenceNode.gain.value = 5; 
         presenceNode.Q.value = 1.0;
 
-        // D. Compressor (Fixed)
+        // 4. Compressor
         const compressor = audioContext.createDynamicsCompressor();
         compressor.threshold.value = -24;
         compressor.ratio.value = 8;
@@ -125,13 +122,19 @@ startBtn.onclick = async () => {
         highCutNode.connect(presenceNode);
         presenceNode.connect(compressor);
 
-        // Visualizer & Recorder Destination
+        // Destination Setup
+        dest = audioContext.createMediaStreamDestination();
+        compressor.connect(dest);
+
+        // Visualizer
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
         compressor.connect(analyser);
 
-        const dest = audioContext.createMediaStreamDestination();
-        compressor.connect(dest);
+        // --- MONITOR LOGIC ---
+        if(chkMonitor.checked) {
+            dest.connect(audioContext.destination); // Hear Live
+        }
 
         // Recorder
         let options = { mimeType: 'audio/webm;codecs=opus' };
@@ -157,7 +160,7 @@ startBtn.onclick = async () => {
         mediaRecorder.start();
         visualize();
 
-        // UI Updates
+        // UI
         startBtn.disabled = true;
         stopBtn.disabled = false;
         stopBtn.style.opacity = "1";
@@ -172,6 +175,11 @@ stopBtn.onclick = () => {
     clearInterval(timerInterval);
     if (mediaRecorder) mediaRecorder.stop();
     if (source) source.mediaStream.getTracks().forEach(t => t.stop());
+    
+    // Disconnect Monitor to stop feedback
+    if(dest) {
+        try { dest.disconnect(audioContext.destination); } catch(e){}
+    }
     if (audioContext) audioContext.close();
     
     startBtn.disabled = false;
@@ -193,7 +201,7 @@ function visualize() {
         let barWidth = (canvas.width / bufferLength) * 2.5;
         for (let i = 0; i < bufferLength; i++) {
             let barHeight = dataArray[i] / 2;
-            canvasCtx.fillStyle = `hsl(${barHeight + 120},100%,50%)`;
+            canvasCtx.fillStyle = `hsl(${barHeight + 100},100%,50%)`;
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
