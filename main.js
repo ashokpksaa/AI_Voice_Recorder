@@ -11,10 +11,6 @@ let audioChunks = [];
 let audioContext;
 let analyser;
 let source;
-let scriptNode;
-
-// --- STRICT SETTINGS ---
-const SILENCE_THRESHOLD = 0.04; // 4% से धीमी आवाज़ को 0 कर देगा
 
 // Timer
 let startTime;
@@ -30,8 +26,7 @@ function updateTimer() {
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Activating Vocal Isolation...";
-        
+        statusDiv.innerText = "🔴 Recording (Studio Mode)...";
         startTime = Date.now();
         timerInterval = setInterval(updateTimer, 1000);
         timerDiv.style.color = "#ff3d00";
@@ -39,12 +34,12 @@ startBtn.onclick = async () => {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // 1. MIC INPUT (Strict Mode)
+        // 1. MIC INPUT (Auto Gain OFF - Best for Quality)
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                autoGainControl: false, // ❌ OFF: शोर को बढ़ने से रोकेगा
+                autoGainControl: false, // OFF: आवाज़ नेचुरल रहेगी
                 googEchoCancellation: true,
                 googNoiseSuppression: true,
                 googHighpassFilter: true
@@ -53,60 +48,57 @@ startBtn.onclick = async () => {
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // --- THE "CUT EVERYTHING" CHAIN ---
+        // 2. VOLUME BOOSTER (Moderate)
+        // 4.0 बहुत ज्यादा था, 1.0 कम था। 2.5 पर बैलेंस रहेगा।
+        const gainNode = audioContext.createGain();
+        gainNode.gain.value = 2.5;
 
-        // A. SUPER HIGH PASS (Fan/Bike Killer)
-        // हमने इसे 200Hz कर दिया है। 
-        // इससे आवाज़ थोड़ी भारी कम होगी, लेकिन पंखे की "हवा" पूरी तरह गायब हो जाएगी।
+        // --- THE "GOLDEN" FILTER CHAIN ---
+
+        // A. Rumble Remover (100Hz)
+        // 200Hz ने आवाज़ पतली कर दी थी। 100Hz पर Bass वापस आएगा।
         const lowCut = audioContext.createBiquadFilter();
         lowCut.type = 'highpass';
-        lowCut.frequency.value = 200; 
+        lowCut.frequency.value = 100; 
 
-        // B. SUPER LOW PASS (Horn/Hiss Killer)
-        // इसे 3000Hz पर लॉक कर दिया है।
-        // हॉर्न (3500Hz+) और सर-सर (4000Hz+) का अंदर आना नामुमकिन है।
+        // B. TABLE TAP KILLER (500Hz Notch) - यह आपको पसंद आया था
+        // यह टेबल की "टक-टक" और कमरे की "गूंज" को खींच लेगा।
+        const woodCut = audioContext.createBiquadFilter();
+        woodCut.type = 'peaking'; // Notch की तरह काम करेगा gain - के साथ
+        woodCut.frequency.value = 500; 
+        woodCut.Q.value = 1.5;
+        woodCut.gain.value = -10; // 10dB कम कर दिया
+
+        // C. HISS KILLER (6000Hz) - Safe Limit
+        // 3000Hz ने आवाज़ बंद कर दी थी। 6000Hz पर आवाज़ साफ़ रहेगी,
+        // लेकिन बारीक "सीटी" (Hiss) कट जाएगी।
         const highCut = audioContext.createBiquadFilter();
         highCut.type = 'lowpass';
-        highCut.frequency.value = 3000; 
+        highCut.frequency.value = 6000; 
 
-        // C. COMPRESSOR (Leveler)
-        // आवाज़ को एक बराबर रखने के लिए
+        // D. COMPRESSOR (Vocal Leveler)
         const compressor = audioContext.createDynamicsCompressor();
-        compressor.threshold.value = -20;
+        compressor.threshold.value = -24;
+        compressor.knee.value = 30;
         compressor.ratio.value = 6; 
-        compressor.attack.value = 0.005;
-        compressor.release.value = 0.15;
-
-        // D. HARD NOISE GATE (Sannata Maker)
-        scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
-        scriptNode.onaudioprocess = function(ev) {
-            const input = ev.inputBuffer.getChannelData(0);
-            const output = ev.outputBuffer.getChannelData(0);
-            
-            for (let i = 0; i < input.length; i++) {
-                // अगर आवाज़ 4% से कम है (शोर), तो उसे MUTE कर दो
-                if (Math.abs(input[i]) < SILENCE_THRESHOLD) {
-                    output[i] = 0;
-                } else {
-                    output[i] = input[i];
-                }
-            }
-        };
+        compressor.attack.value = 0.003; 
+        compressor.release.value = 0.25;
 
         // CONNECTIONS
-        // Mic -> LowCut -> HighCut -> Compressor -> Gate -> Out
-        source.connect(lowCut);
-        lowCut.connect(highCut);
+        // Mic -> Boost -> LowCut -> WoodCut -> HighCut -> Compressor -> Out
+        source.connect(gainNode);
+        gainNode.connect(lowCut);
+        lowCut.connect(woodCut);
+        woodCut.connect(highCut);
         highCut.connect(compressor);
-        compressor.connect(scriptNode);
         
         // Visualizer
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
-        scriptNode.connect(analyser);
+        compressor.connect(analyser);
 
         const dest = audioContext.createMediaStreamDestination();
-        scriptNode.connect(dest);
+        compressor.connect(dest);
 
         // RECORDER
         let options = { mimeType: 'audio/webm;codecs=opus' };
@@ -124,7 +116,7 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Saved (Strict Mode)!";
+            statusDiv.innerText = "✅ Saved (Natural Voice)!";
             statusDiv.style.color = "#00e676";
             timerDiv.style.color = "#00e676";
         };
@@ -134,11 +126,11 @@ startBtn.onclick = async () => {
 
         // UI
         startBtn.disabled = true;
+        startBtn.style.opacity = "0.5";
         stopBtn.disabled = false;
         stopBtn.style.opacity = "1";
         stopBtn.style.pointerEvents = "all";
-        statusDiv.innerText = "🔴 Recording (Strict Noise Cut)...";
-        statusDiv.style.color = "#ff3d00";
+        stopBtn.style.background = "#ff3d00";
 
     } catch (err) {
         alert("Error: " + err.message);
@@ -152,12 +144,15 @@ stopBtn.onclick = () => {
     if (audioContext) audioContext.close();
     
     startBtn.disabled = false;
+    startBtn.style.opacity = "1";
     stopBtn.disabled = true;
     stopBtn.style.opacity = "0.5";
     stopBtn.style.pointerEvents = "none";
+    if(drawVisual) cancelAnimationFrame(drawVisual);
 };
 
-// Visualizer (Simple)
+// Visualizer
+let drawVisual;
 function visualize() {
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
@@ -171,8 +166,7 @@ function visualize() {
         let barWidth = (canvas.width / bufferLength) * 2.5;
         for (let i = 0; i < bufferLength; i++) {
             let barHeight = dataArray[i] / 2;
-            // Red bars for "Recording"
-            canvasCtx.fillStyle = `hsl(10, 100%, 50%)`;
+            canvasCtx.fillStyle = `hsl(${barHeight + 100},100%,50%)`;
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
