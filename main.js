@@ -26,7 +26,8 @@ function updateTimer() {
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "🔴 Recording (Studio Mode)...";
+        statusDiv.innerText = "Initializing AI Logic...";
+        
         startTime = Date.now();
         timerInterval = setInterval(updateTimer, 1000);
         timerDiv.style.color = "#ff3d00";
@@ -34,71 +35,112 @@ startBtn.onclick = async () => {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // 1. MIC INPUT (Auto Gain OFF - Best for Quality)
+        // 1. HARDWARE AI (Base Layer)
+        // ब्राउज़र का अपना AI सबसे पहले शोर को कम करेगा
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: false, // OFF: आवाज़ नेचुरल रहेगी
-                googEchoCancellation: true,
-                googNoiseSuppression: true,
-                googHighpassFilter: true
+                noiseSuppression: true, // Krisp जैसा बेसिक AI
+                autoGainControl: true,  // वॉल्यूम बैलेंस
+                channelCount: 1
             }
         });
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // 2. VOLUME BOOSTER (Moderate)
-        // 4.0 बहुत ज्यादा था, 1.0 कम था। 2.5 पर बैलेंस रहेगा।
-        const gainNode = audioContext.createGain();
-        gainNode.gain.value = 2.5;
+        // --- THE "KRISP" STRATEGY (Multi-Stage Isolation) ---
+        // हम आवाज़ को तराशेंगे (Sculpting), सिर्फ काटेंगे नहीं।
 
-        // --- THE "GOLDEN" FILTER CHAIN ---
-
-        // A. Rumble Remover (100Hz)
-        // 200Hz ने आवाज़ पतली कर दी थी। 100Hz पर Bass वापस आएगा।
+        // STAGE 1: BRICK WALL FILTERS (फालतू फ्रीक्वेंसी बाहर)
+        
+        // A. Rumble Wall (150Hz) - पंखा/इंजन खत्म
         const lowCut = audioContext.createBiquadFilter();
         lowCut.type = 'highpass';
-        lowCut.frequency.value = 100; 
+        lowCut.frequency.value = 150; 
+        lowCut.Q.value = 1.0; // Sharpness
 
-        // B. TABLE TAP KILLER (500Hz Notch) - यह आपको पसंद आया था
-        // यह टेबल की "टक-टक" और कमरे की "गूंज" को खींच लेगा।
-        const woodCut = audioContext.createBiquadFilter();
-        woodCut.type = 'peaking'; // Notch की तरह काम करेगा gain - के साथ
-        woodCut.frequency.value = 500; 
-        woodCut.Q.value = 1.5;
-        woodCut.gain.value = -10; // 10dB कम कर दिया
-
-        // C. HISS KILLER (6000Hz) - Safe Limit
-        // 3000Hz ने आवाज़ बंद कर दी थी। 6000Hz पर आवाज़ साफ़ रहेगी,
-        // लेकिन बारीक "सीटी" (Hiss) कट जाएगी।
+        // B. Hiss Wall (3500Hz) - हॉर्न/सीटी खत्म
+        // इंसान की साफ़ आवाज़ 3000-3500Hz तक ही होती है।
         const highCut = audioContext.createBiquadFilter();
         highCut.type = 'lowpass';
-        highCut.frequency.value = 6000; 
+        highCut.frequency.value = 3500; 
+        highCut.Q.value = 1.0;
 
-        // D. COMPRESSOR (Vocal Leveler)
+        // STAGE 2: VOCAL ENHANCEMENT (आवाज़ को साफ़ करना)
+        
+        // C. Mud Remover (300Hz) - गूंज हटाना
+        const mudCut = audioContext.createBiquadFilter();
+        mudCut.type = 'peaking';
+        mudCut.frequency.value = 300;
+        mudCut.gain.value = -10; // -10dB
+
+        // D. Clarity Boost (2000Hz) - आवाज़ में चमक लाना
+        const clarityBoost = audioContext.createBiquadFilter();
+        clarityBoost.type = 'peaking';
+        clarityBoost.frequency.value = 2000;
+        clarityBoost.gain.value = 5; // +5dB
+
+        // STAGE 3: DYNAMICS PROCESSING (Noise Gate + Compressor)
+        
+        // E. Compressor (आवाज़ को एक लेवल पर रखना)
         const compressor = audioContext.createDynamicsCompressor();
         compressor.threshold.value = -24;
-        compressor.knee.value = 30;
-        compressor.ratio.value = 6; 
-        compressor.attack.value = 0.003; 
-        compressor.release.value = 0.25;
+        compressor.knee.value = 20;
+        compressor.ratio.value = 5;
+        compressor.attack.value = 0.005;
+        compressor.release.value = 0.20;
 
-        // CONNECTIONS
-        // Mic -> Boost -> LowCut -> WoodCut -> HighCut -> Compressor -> Out
-        source.connect(gainNode);
-        gainNode.connect(lowCut);
-        lowCut.connect(woodCut);
-        woodCut.connect(highCut);
-        highCut.connect(compressor);
+        // F. EXPANDER / GATE (सन्नाटा करना)
+        // यह Krisp का सबसे अहम हिस्सा है। जब आप चुप हों, यह माइक बंद कर देगा।
+        const scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+        
+        // Settings for Gate
+        const NOISE_FLOOR = 0.04; // 4% से नीचे शोर माना जाएगा
+        let envelope = 0;
+
+        scriptNode.onaudioprocess = function(ev) {
+            const input = ev.inputBuffer.getChannelData(0);
+            const output = ev.outputBuffer.getChannelData(0);
+
+            for (let i = 0; i < input.length; i++) {
+                const sample = input[i];
+                const amplitude = Math.abs(sample);
+
+                // Smooth Envelope Follower (आवाज़ का पीछा करना)
+                if (amplitude > envelope) {
+                    envelope = 0.001 * (amplitude - envelope) + envelope;
+                } else {
+                    envelope = 0.0001 * (amplitude - envelope) + envelope;
+                }
+
+                // SMART GATE LOGIC
+                if (envelope < NOISE_FLOOR) {
+                    // अगर शोर है, तो धीरे-धीरे आवाज़ कम करो (Fade Out)
+                    // सीधा 0 नहीं करेंगे वरना आवाज़ कटेगी
+                    output[i] = sample * 0.1; 
+                } else {
+                    // अगर आवाज़ है, तो पूरी जाने दो
+                    output[i] = sample;
+                }
+            }
+        };
+
+        // CONNECTIONS (The Chain)
+        // Source -> LowCut -> HighCut -> MudCut -> Clarity -> Compressor -> Gate -> Out
+        source.connect(lowCut);
+        lowCut.connect(highCut);
+        highCut.connect(mudCut);
+        mudCut.connect(clarityBoost);
+        clarityBoost.connect(compressor);
+        compressor.connect(scriptNode);
         
         // Visualizer
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
-        compressor.connect(analyser);
+        scriptNode.connect(analyser);
 
         const dest = audioContext.createMediaStreamDestination();
-        compressor.connect(dest);
+        scriptNode.connect(dest);
 
         // RECORDER
         let options = { mimeType: 'audio/webm;codecs=opus' };
@@ -116,7 +158,7 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Saved (Natural Voice)!";
+            statusDiv.innerText = "✅ Saved (Voice Only)!";
             statusDiv.style.color = "#00e676";
             timerDiv.style.color = "#00e676";
         };
@@ -131,9 +173,13 @@ startBtn.onclick = async () => {
         stopBtn.style.opacity = "1";
         stopBtn.style.pointerEvents = "all";
         stopBtn.style.background = "#ff3d00";
+        statusDiv.innerText = "🔴 Recording (Vocal Isolation)...";
+        statusDiv.style.color = "#ff3d00";
 
     } catch (err) {
-        alert("Error: " + err.message);
+        clearInterval(timerInterval);
+        statusDiv.innerText = "Error: " + err.message;
+        statusDiv.style.color = "red";
     }
 };
 
@@ -166,7 +212,7 @@ function visualize() {
         let barWidth = (canvas.width / bufferLength) * 2.5;
         for (let i = 0; i < bufferLength; i++) {
             let barHeight = dataArray[i] / 2;
-            canvasCtx.fillStyle = `hsl(${barHeight + 100},100%,50%)`;
+            canvasCtx.fillStyle = `hsl(${barHeight + 160},100%,50%)`; // Aqua Blue
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
