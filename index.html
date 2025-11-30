@@ -3,28 +3,40 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vocal Isolator</title>
+    <title>Studio Voice Recorder</title>
     <style>
-        body { font-family: sans-serif; background: #111; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-        .container { text-align: center; background: #222; padding: 25px; border-radius: 15px; width: 90%; max-width: 400px; }
-        h2 { color: #00e676; margin-bottom: 5px; }
-        #timer { font-size: 3rem; font-weight: bold; margin: 15px 0; font-family: monospace; }
-        canvas { width: 100%; height: 60px; background: #000; border-radius: 5px; margin-bottom: 15px; }
-        .status { color: #aaa; font-size: 0.9rem; margin-bottom: 15px; }
-        button { padding: 15px; width: 45%; border-radius: 50px; border: none; font-weight: bold; font-size: 16px; cursor: pointer; }
-        #btnStart { background: #00e676; }
-        #btnStop { background: #ff3d00; color: white; opacity: 0.5; }
-        audio { width: 100%; margin-top: 20px; display: none; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0e0e10; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        .container { text-align: center; background: #18181b; padding: 30px; border-radius: 20px; width: 90%; max-width: 400px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); border: 1px solid #333; }
+        
+        h2 { margin: 0 0 10px 0; color: #00e676; letter-spacing: 1px; }
+        
+        #timer { font-size: 3.5rem; font-weight: bold; font-family: monospace; color: #fff; margin: 15px 0; text-shadow: 0 0 15px rgba(0,230,118,0.2); }
+        
+        canvas { width: 100%; height: 70px; background: #000; border-radius: 10px; margin-bottom: 20px; border: 1px solid #333; }
+        
+        .status { font-size: 0.9rem; margin-bottom: 20px; color: #888; font-weight: 500; }
+        
+        button { padding: 16px; border: none; border-radius: 50px; font-size: 18px; font-weight: bold; cursor: pointer; margin: 5px; width: 45%; transition: 0.2s; }
+        #btnStart { background: #00e676; color: #000; }
+        #btnStart:hover { background: #00c853; transform: scale(1.05); }
+        
+        #btnStop { background: #ff3d00; color: white; opacity: 0.5; pointer-events: none; }
+        
+        audio { width: 100%; margin-top: 20px; display: none; border-radius: 10px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>🎙️ Vocal Isolator</h2>
+        <h2>🎙️ Studio Pro</h2>
         <div id="timer">00:00</div>
         <canvas id="visualizer"></canvas>
-        <div class="status" id="status">Ready.</div>
-        <button id="btnStart">REC</button>
-        <button id="btnStop">STOP</button>
+        <div class="status" id="status">Ready to Record High Quality</div>
+        
+        <div>
+            <button id="btnStart">REC</button>
+            <button id="btnStop">STOP</button>
+        </div>
+
         <audio id="audioPlayer" controls></audio>
     </div>
     <script src="main.js"></script>
