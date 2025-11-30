@@ -6,11 +6,12 @@ const canvas = document.getElementById('visualizer');
 const audioPlayer = document.getElementById('audioPlayer');
 const canvasCtx = canvas.getContext('2d');
 
-// SLIDERS & VALUES
+// SLIDERS
 const slLow = document.getElementById('slLow');
 const slHigh = document.getElementById('slHigh');
 const slMid = document.getElementById('slMid');
 
+// LABELS
 const valLow = document.getElementById('valLow');
 const valHigh = document.getElementById('valHigh');
 const valMid = document.getElementById('valMid');
@@ -21,31 +22,43 @@ let audioContext;
 let analyser;
 let source;
 
-// NODES (इन्हें बाहर रखा है ताकि स्लाइडर इन्हें बदल सकें)
-let lowCutNode;
-let highCutNode;
-let presenceNode; // Voice Boost
-let hissFilterNode;
+// NODES (Global Variables)
+// हम इन्हें 'var' बना रहे हैं ताकि ये कभी भी access हो सकें
+var lowCutNode = null;
+var highCutNode = null;
+var presenceNode = null; 
 
-// Timer
 let startTime;
 let timerInterval;
 
-// --- SLIDER EVENTS (Real-time Change) ---
-slLow.oninput = (e) => { 
-    if(lowCutNode) lowCutNode.frequency.value = e.target.value; 
-    valLow.innerText = e.target.value; 
-};
-slHigh.oninput = (e) => { 
-    // यह 'hissFilter' को कंट्रोल करेगा
-    if(hissFilterNode) hissFilterNode.frequency.value = e.target.value; 
-    valHigh.innerText = e.target.value; 
-};
-slMid.oninput = (e) => { 
-    // यह 'presenceBoost' को कंट्रोल करेगा
-    if(presenceNode) presenceNode.frequency.value = e.target.value; 
-    valMid.innerText = e.target.value; 
-};
+// --- SLIDER LOGIC (Ye ab 100% kaam karega) ---
+
+// 1. Fan Cut Slider
+slLow.addEventListener('input', function() {
+    let val = parseFloat(this.value); // Number mein convert kiya
+    valLow.innerText = val;
+    if (lowCutNode) {
+        lowCutNode.frequency.setValueAtTime(val, audioContext.currentTime);
+    }
+});
+
+// 2. Hiss Cut Slider
+slHigh.addEventListener('input', function() {
+    let val = parseFloat(this.value);
+    valHigh.innerText = val;
+    if (highCutNode) {
+        highCutNode.frequency.setValueAtTime(val, audioContext.currentTime);
+    }
+});
+
+// 3. Voice Boost Slider
+slMid.addEventListener('input', function() {
+    let val = parseFloat(this.value);
+    valMid.innerText = val;
+    if (presenceNode) {
+        presenceNode.frequency.setValueAtTime(val, audioContext.currentTime);
+    }
+});
 
 function updateTimer() {
     const elapsed = Date.now() - startTime;
@@ -57,7 +70,7 @@ function updateTimer() {
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Recording (Adjust Sliders Now)...";
+        statusDiv.innerText = "🔴 Live Tuning Active...";
         
         startTime = Date.now();
         timerInterval = setInterval(updateTimer, 1000);
@@ -66,7 +79,7 @@ startBtn.onclick = async () => {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // 1. Microphone Input (Browser AI ON)
+        // Mic Input
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
@@ -80,42 +93,39 @@ startBtn.onclick = async () => {
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // --- FILTER CHAIN (From your favorite code) ---
+        // --- CREATING FILTERS ---
 
-        // A. High-Pass (Fan Remover) -> Controlled by Slider 1
+        // A. Fan Cut (High Pass)
         lowCutNode = audioContext.createBiquadFilter();
         lowCutNode.type = 'highpass';
-        lowCutNode.frequency.value = slLow.value; // (Default 85Hz)
+        lowCutNode.frequency.value = parseFloat(slLow.value);
 
-        // B. Low-Pass Filter (Hiss Remover) -> Controlled by Slider 2
-        hissFilterNode = audioContext.createBiquadFilter();
-        hissFilterNode.type = 'lowpass'; 
-        hissFilterNode.frequency.value = slHigh.value; // (Default 8000Hz)
-        hissFilterNode.Q.value = 0.7;
+        // B. Hiss Cut (Low Pass)
+        highCutNode = audioContext.createBiquadFilter();
+        highCutNode.type = 'lowpass';
+        highCutNode.frequency.value = parseFloat(slHigh.value);
 
-        // C. Parametric EQ (Voice Boost) -> Controlled by Slider 3
+        // C. Voice Boost (Peaking)
         presenceNode = audioContext.createBiquadFilter();
         presenceNode.type = 'peaking';
-        presenceNode.frequency.value = slMid.value; // (Default 2500Hz)
-        presenceNode.gain.value = 3; 
+        presenceNode.frequency.value = parseFloat(slMid.value);
+        presenceNode.gain.value = 5; // Strong Boost (Taki slide karne par fark dikhe)
         presenceNode.Q.value = 1.0;
 
-        // D. Soft Compressor (Fixed Settings)
+        // D. Compressor (Fixed)
         const compressor = audioContext.createDynamicsCompressor();
-        compressor.threshold.value = -20;
-        compressor.knee.value = 20;
-        compressor.ratio.value = 8;     
-        compressor.attack.value = 0.005; 
+        compressor.threshold.value = -24;
+        compressor.ratio.value = 8;
+        compressor.attack.value = 0.003;
         compressor.release.value = 0.15;
 
         // --- CONNECTIONS ---
-        // Mic -> LowCut -> HissFilter -> Presence -> Compressor -> Out
         source.connect(lowCutNode);
-        lowCutNode.connect(hissFilterNode);
-        hissFilterNode.connect(presenceNode);
+        lowCutNode.connect(highCutNode);
+        highCutNode.connect(presenceNode);
         presenceNode.connect(compressor);
 
-        // Visualizer
+        // Visualizer & Recorder Destination
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
         compressor.connect(analyser);
@@ -123,7 +133,7 @@ startBtn.onclick = async () => {
         const dest = audioContext.createMediaStreamDestination();
         compressor.connect(dest);
 
-        // RECORDER
+        // Recorder
         let options = { mimeType: 'audio/webm;codecs=opus' };
         if (!MediaRecorder.isTypeSupported(options.mimeType)) { options = { mimeType: 'audio/mp4' }; }
 
@@ -139,7 +149,7 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Saved! Check the sliders.";
+            statusDiv.innerText = "✅ Saved!";
             statusDiv.style.color = "#00e676";
             timerDiv.style.color = "#00e676";
         };
@@ -147,7 +157,7 @@ startBtn.onclick = async () => {
         mediaRecorder.start();
         visualize();
 
-        // UI
+        // UI Updates
         startBtn.disabled = true;
         stopBtn.disabled = false;
         stopBtn.style.opacity = "1";
@@ -170,7 +180,6 @@ stopBtn.onclick = () => {
     stopBtn.style.pointerEvents = "none";
 };
 
-// Visualizer
 function visualize() {
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
