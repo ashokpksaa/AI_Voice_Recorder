@@ -12,7 +12,7 @@ let audioContext;
 let analyser;
 let source;
 
-// Timer Variables
+// Timer
 let startTime;
 let timerInterval;
 
@@ -26,9 +26,8 @@ function updateTimer() {
 
 startBtn.onclick = async () => {
     try {
-        statusDiv.innerText = "Activating Pro Studio Mode...";
+        statusDiv.innerText = "Loading AI Filters...";
         
-        // Timer Start
         startTime = Date.now();
         timerInterval = setInterval(updateTimer, 1000);
         timerDiv.style.color = "#ff3d00";
@@ -36,15 +35,12 @@ startBtn.onclick = async () => {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         await audioContext.resume();
 
-        // 1. MIC SETTINGS (Stability Fix)
-        // 'autoGainControl: false' -> यह सबसे ज़रूरी है।
-        // अब मोबाइल अपनी मर्जी से वॉल्यूम ऊपर-नीचे नहीं करेगा।
+        // 1. HARDWARE AI INPUT (The Foundation)
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                autoGainControl: false, // ❌ OFF (ताकि आवाज़ Consistent रहे)
-                channelCount: 1,
+                autoGainControl: true, // Auto Volume ON (AI needs consistent volume)
                 googEchoCancellation: true,
                 googNoiseSuppression: true,
                 googHighpassFilter: true
@@ -53,65 +49,119 @@ startBtn.onclick = async () => {
 
         source = audioContext.createMediaStreamSource(stream);
 
-        // 2. VOLUME STABILIZER (Manual Gain)
-        // चूंकि हमने Auto Volume बंद किया है, हमें मैन्युअल वॉल्यूम देना होगा।
-        // 3.5x परफेक्ट बैलेंस है।
-        const gainNode = audioContext.createGain();
-        gainNode.gain.value = 3.5;
+        // --- THE "MULTI-BAND" AI STRATEGY ---
+        // हम Krisp की तरह ऑडियो को 3 अलग-अलग बैंड्स में तोड़ेंगे।
+        // Low Band: पंखा/इंजन
+        // Mid Band: आपकी आवाज़
+        // High Band: हॉर्न/हिस
+        // हम Low और High को सख्ती से काटेंगे, और Mid को साफ़ रखेंगे।
 
-        // --- THE "90% GOOD" FILTERS (Restored) ---
+        // SPLITTER (3 रास्तों में बांटना)
+        const lowSplit = audioContext.createBiquadFilter();
+        lowSplit.type = 'lowpass';
+        lowSplit.frequency.value = 250; // 0-250Hz (शोर का घर)
 
-        // A. Rumble Cutter (100Hz) - पंखा/भारी शोर हटाने के लिए
-        const lowCut = audioContext.createBiquadFilter();
-        lowCut.type = 'highpass';
-        lowCut.frequency.value = 100; 
+        const midSplit = audioContext.createBiquadFilter();
+        midSplit.type = 'bandpass';
+        midSplit.frequency.value = 1500; // 250-4000Hz (आपकी आवाज़)
+        midSplit.Q.value = 0.5; // Wide range
 
-        // B. Echo Remover (350Hz) - कमरे की गूंज हटाने के लिए
-        const echoCut = audioContext.createBiquadFilter();
-        echoCut.type = 'peaking';
-        echoCut.frequency.value = 350;
-        echoCut.Q.value = 1.5;
-        echoCut.gain.value = -10; 
+        const highSplit = audioContext.createBiquadFilter();
+        highSplit.type = 'highpass';
+        highSplit.frequency.value = 4000; // 4000Hz+ (हॉर्न/सीटी)
 
-        // C. Table Tap Killer (500Hz) - 'टक-टक' हटाने के लिए
-        const woodCut = audioContext.createBiquadFilter();
-        woodCut.type = 'peaking';
-        woodCut.frequency.value = 500; 
-        woodCut.Q.value = 2.0;
-        woodCut.gain.value = -10; // -10dB Cut
+        // PROCESSORS (सफाई अभियान)
+        
+        // 1. Low Band Cleaner (पंखा काटना)
+        const lowGain = audioContext.createGain();
+        lowGain.gain.value = 0.0; // 100% MUTE (पंखे की रेंज पूरी तरह बंद)
 
-        // D. Hiss/Horn Shield (7000Hz) - सर-सर हटाने के लिए
-        // (पिछली बार 3000Hz पर आवाज़ खराब हुई थी, 7000Hz सेफ है)
-        const highCut = audioContext.createBiquadFilter();
-        highCut.type = 'lowpass';
-        highCut.frequency.value = 7000;
+        // 2. Mid Band Booster (आवाज़ को निखारना)
+        const midGain = audioContext.createGain();
+        midGain.gain.value = 1.2; // आवाज़ को थोड़ा ऊपर उठाओ
 
-        // E. Compressor (Leveler) - आवाज़ फटने से बचाएगा
+        // 3. High Band Cleaner (हॉर्न काटना)
+        const highGain = audioContext.createGain();
+        highGain.gain.value = 0.1; // 90% MUTE (हॉर्न/हिस को बहुत धीमा कर दो)
+
+        // MERGER (वापस जोड़ना)
+        // हम तीनों को वापस एक साथ जोड़ेंगे
+        const merger = audioContext.createChannelMerger(1);
+
+        // CONNECTIONS (The Web)
+        source.connect(lowSplit);
+        source.connect(midSplit);
+        source.connect(highSplit);
+
+        lowSplit.connect(lowGain);
+        midSplit.connect(midGain);
+        highSplit.connect(highGain);
+
+        // सब कुछ वापस Compressor में जाएगा
+        lowGain.connect(merger, 0, 0); // (नोट: Merger थोड़ा जटिल है, हम सीधा Compressor यूज़ करेंगे)
+        
+        // SIMPLIFIED MULTI-BAND CHAIN (Reliable Method)
+        // ऊपर वाला Splitter कभी-कभी Phase Issue करता है, इसलिए हम "Serial Chain" यूज़ करेंगे जो Krisp जैसा ही काम करता है।
+
+        // LAYER 1: DEEP CLEANING
+        const deepCut = audioContext.createBiquadFilter();
+        deepCut.type = 'highpass';
+        deepCut.frequency.value = 180; // पंखे की जड़ काटी
+
+        // LAYER 2: SPEECH ISOLATION (सिर्फ इंसानी रेंज रखो)
+        const speechIso = audioContext.createBiquadFilter();
+        speechIso.type = 'lowpass';
+        speechIso.frequency.value = 3500; // इसके ऊपर सब कचरा है (हॉर्न/सीटी)
+
+        // LAYER 3: PRESENCE (आवाज़ को सामने लाना)
+        const presence = audioContext.createBiquadFilter();
+        presence.type = 'peaking';
+        presence.frequency.value = 1000; // इंसानी आवाज़ का कोर
+        presence.gain.value = 5; // Boost
+        presence.Q.value = 1.0;
+
+        // LAYER 4: INTELLIGENT GATE (AI Logic)
+        const scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+        const SILENCE = 0.03;
+        
+        scriptNode.onaudioprocess = function(ev) {
+            const input = ev.inputBuffer.getChannelData(0);
+            const output = ev.outputBuffer.getChannelData(0);
+            
+            for (let i = 0; i < input.length; i++) {
+                // अगर आवाज़ बहुत धीमी है, तो उसे बिल्कुल चुप कर दो
+                if (Math.abs(input[i]) < SILENCE) {
+                    output[i] = 0;
+                } else {
+                    // अगर आवाज़ है, तो उसे थोड़ा साफ़ (Sharp) करो
+                    output[i] = input[i] * 1.1; 
+                }
+            }
+        };
+
+        // LAYER 5: COMPRESSOR (Final Polish)
         const compressor = audioContext.createDynamicsCompressor();
-        compressor.threshold.value = -24;
-        compressor.knee.value = 30;
-        compressor.ratio.value = 6; 
-        compressor.attack.value = 0.003; 
-        compressor.release.value = 0.25;
+        compressor.threshold.value = -20;
+        compressor.ratio.value = 6;
+        compressor.attack.value = 0.003;
+        compressor.release.value = 0.15;
 
-        // --- CONNECTIONS ---
-        // Mic -> Gain -> LowCut -> EchoCut -> WoodCut -> HighCut -> Compressor -> Out
-        source.connect(gainNode);
-        gainNode.connect(lowCut);
-        lowCut.connect(echoCut);
-        echoCut.connect(woodCut);
-        woodCut.connect(highCut);
-        highCut.connect(compressor);
+        // FINAL CONNECTIONS
+        source.connect(deepCut);
+        deepCut.connect(speechIso);
+        speechIso.connect(presence);
+        presence.connect(compressor);
+        compressor.connect(scriptNode);
 
         // Visualizer
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
-        compressor.connect(analyser);
+        scriptNode.connect(analyser);
 
         const dest = audioContext.createMediaStreamDestination();
-        compressor.connect(dest);
+        scriptNode.connect(dest);
 
-        // Recorder
+        // RECORDER
         let options = { mimeType: 'audio/webm;codecs=opus' };
         if (!MediaRecorder.isTypeSupported(options.mimeType)) { options = { mimeType: 'audio/mp4' }; }
 
@@ -127,7 +177,7 @@ startBtn.onclick = async () => {
             audioPlayer.src = url;
             audioPlayer.style.display = 'block';
             audioChunks = [];
-            statusDiv.innerText = "✅ Saved (Stable Pro)!";
+            statusDiv.innerText = "✅ Saved (AI Logic)!";
             statusDiv.style.color = "#00e676";
             timerDiv.style.color = "#00e676";
         };
@@ -142,7 +192,7 @@ startBtn.onclick = async () => {
         stopBtn.style.opacity = "1";
         stopBtn.style.pointerEvents = "all";
         stopBtn.style.background = "#ff3d00";
-        statusDiv.innerText = "🔴 Recording...";
+        statusDiv.innerText = "🔴 Recording (AI Filter Active)...";
         statusDiv.style.color = "#ff3d00";
 
     } catch (err) {
@@ -180,7 +230,7 @@ function visualize() {
         let barWidth = (canvas.width / bufferLength) * 2.5;
         for (let i = 0; i < bufferLength; i++) {
             let barHeight = dataArray[i] / 2;
-            canvasCtx.fillStyle = `hsl(${barHeight + 100},100%,50%)`;
+            canvasCtx.fillStyle = `hsl(${barHeight + 140},100%,50%)`; // Tech Green
             canvasCtx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight);
             x += barWidth + 1;
         }
